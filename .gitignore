@@ -1,0 +1,11 @@
+bin/
+obj/
+.vs/
+_backup_*/
+_codex_pre_restore_*/
+package-lock.json
+.codegraph/
+*.user
+Multiagent/
+Raft_Wiki_Download/
+*.rmod

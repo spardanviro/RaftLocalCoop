@@ -1,0 +1,209 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="15.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <Import Project="$(MSBuildExtensionsPath)\$(MSBuildToolsVersion)\Microsoft.Common.props" Condition="Exists('$(MSBuildExtensionsPath)\$(MSBuildToolsVersion)\Microsoft.Common.props')" />
+  <PropertyGroup>
+    <Configuration Condition=" '$(Configuration)' == '' ">Debug</Configuration>
+    <Platform Condition=" '$(Platform)' == '' ">AnyCPU</Platform>
+    <ProjectGuid>{8DAA9AA0-10DF-439B-B33A-AFC652E4D299}</ProjectGuid>
+    <OutputType>Library</OutputType>
+    <AppDesignerFolder>Properties</AppDesignerFolder>
+    <RootNamespace>SplitScreen</RootNamespace>
+    <AssemblyName>SplitScreen</AssemblyName>
+    <TargetFrameworkVersion>v4.8</TargetFrameworkVersion>
+    <FileAlignment>512</FileAlignment>
+    <Deterministic>true</Deterministic>
+    <TargetFrameworkProfile />
+  </PropertyGroup>
+  <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'Debug|AnyCPU' ">
+    <DebugSymbols>true</DebugSymbols>
+    <DebugType>full</DebugType>
+    <Optimize>false</Optimize>
+    <OutputPath>bin\Debug\</OutputPath>
+    <DefineConstants>DEBUG;TRACE</DefineConstants>
+    <ErrorReport>prompt</ErrorReport>
+    <WarningLevel>4</WarningLevel>
+    <PlatformTarget>x64</PlatformTarget>
+  </PropertyGroup>
+  <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'Release|AnyCPU' ">
+    <DebugType>pdbonly</DebugType>
+    <Optimize>true</Optimize>
+    <OutputPath>bin\Release\</OutputPath>
+    <DefineConstants>TRACE</DefineConstants>
+    <ErrorReport>prompt</ErrorReport>
+    <WarningLevel>4</WarningLevel>
+  </PropertyGroup>
+  <ItemGroup>
+    <Reference Include="0Harmony">
+      <HintPath>..\..\..\..\..\Program Files (x86)\Steam\steamapps\common\Raft\Raft_Data\Managed\UnityModManager\0Harmony.dll</HintPath>
+    </Reference>
+    <Reference Include="com.rlabrecque.steamworks.net">
+      <HintPath>..\..\..\..\..\Program Files (x86)\Steam\steamapps\common\Raft\Raft_Data\Managed\com.rlabrecque.steamworks.net.dll</HintPath>
+    </Reference>
+    <Reference Include="Assembly-CSharp">
+      <HintPath>..\..\..\..\..\Program Files (x86)\Steam\steamapps\common\Raft\Raft_Data\Managed\Assembly-CSharp.dll</HintPath>
+    </Reference>
+    <Reference Include="FMODUnity">
+      <HintPath>..\..\..\..\..\Program Files (x86)\Steam\steamapps\common\Raft\Raft_Data\Managed\FMODUnity.dll</HintPath>
+    </Reference>
+    <Reference Include="System" />
+    <Reference Include="System.Core" />
+    <Reference Include="System.Xml.Linq" />
+    <Reference Include="System.Data.DataSetExtensions" />
+    <Reference Include="Microsoft.CSharp" />
+    <Reference Include="System.Data" />
+    <Reference Include="System.Net.Http" />
+    <Reference Include="System.Xml" />
+    <Reference Include="Unity.InputSystem">
+      <HintPath>..\..\..\..\..\Program Files (x86)\Steam\steamapps\common\Raft\Raft_Data\Managed\Unity.InputSystem.dll</HintPath>
+    </Reference>
+    <Reference Include="UnityEngine">
+      <HintPath>..\..\..\..\..\Program Files (x86)\Steam\steamapps\common\Raft\Raft_Data\Managed\UnityEngine.dll</HintPath>
+    </Reference>
+    <Reference Include="UnityEngine.AnimationModule">
+      <HintPath>..\..\..\..\..\Program Files (x86)\Steam\steamapps\common\Raft\Raft_Data\Managed\UnityEngine.AnimationModule.dll</HintPath>
+    </Reference>
+    <Reference Include="UnityEngine.AudioModule">
+      <HintPath>..\..\..\..\..\Program Files (x86)\Steam\steamapps\common\Raft\Raft_Data\Managed\UnityEngine.AudioModule.dll</HintPath>
+    </Reference>
+    <Reference Include="UnityEngine.ParticleSystemModule">
+      <HintPath>..\..\..\..\..\Program Files (x86)\Steam\steamapps\common\Raft\Raft_Data\Managed\UnityEngine.ParticleSystemModule.dll</HintPath>
+    </Reference>
+    <Reference Include="UnityEngine.CoreModule">
+      <HintPath>..\..\..\..\..\Program Files (x86)\Steam\steamapps\common\Raft\Raft_Data\Managed\UnityEngine.CoreModule.dll</HintPath>
+    </Reference>
+    <Reference Include="UnityEngine.InputLegacyModule">
+      <HintPath>..\..\..\..\..\Program Files (x86)\Steam\steamapps\common\Raft\Raft_Data\Managed\UnityEngine.InputLegacyModule.dll</HintPath>
+    </Reference>
+    <Reference Include="UnityEngine.PhysicsModule">
+      <HintPath>..\..\..\..\..\Program Files (x86)\Steam\steamapps\common\Raft\Raft_Data\Managed\UnityEngine.PhysicsModule.dll</HintPath>
+    </Reference>
+    <Reference Include="UnityEngine.TextRenderingModule">
+      <HintPath>..\..\..\..\..\Program Files (x86)\Steam\steamapps\common\Raft\Raft_Data\Managed\UnityEngine.TextRenderingModule.dll</HintPath>
+    </Reference>
+    <Reference Include="UnityEngine.UI">
+      <HintPath>..\..\..\..\..\Program Files (x86)\Steam\steamapps\common\Raft\Raft_Data\Managed\UnityEngine.UI.dll</HintPath>
+    </Reference>
+    <Reference Include="UnityEngine.UIModule">
+      <HintPath>..\..\..\..\..\Program Files (x86)\Steam\steamapps\common\Raft\Raft_Data\Managed\UnityEngine.UIModule.dll</HintPath>
+    </Reference>
+    <Reference Include="UnityModManager">
+      <HintPath>..\..\..\..\..\Program Files (x86)\Steam\steamapps\common\Raft\Raft_Data\Managed\UnityModManager\UnityModManager.dll</HintPath>
+    </Reference>
+  </ItemGroup>
+  <ItemGroup>
+    <Compile Include="Runtime\Cm.cs" />
+    <Compile Include="Runtime\PlayerSlot.cs" />
+    <Compile Include="Runtime\SplitScreenRuntime.cs" />
+    <Compile Include="Runtime\InputRouter.cs" />
+    <Compile Include="Runtime\UiRouter.cs" />
+    <Compile Include="Runtime\P2UnstuckMenu.cs" />
+    <Compile Include="Runtime\P2RemoteLookPose.cs" />
+    <Compile Include="Runtime\InteractionRouter.cs" />
+    <Compile Include="Runtime\P2SaveStore.cs" />
+    <Compile Include="Runtime\P2CharacterSettings.cs" />
+    <Compile Include="Runtime\P2InventoryStore.cs" />
+    <Compile Include="Runtime\P2EquipmentStore.cs" />
+    <Compile Include="Runtime\P2InventoryScope.cs" />
+    <Compile Include="Runtime\P2InventoryGlobalScope.cs" />
+    <Compile Include="Runtime\P2OriginalScope.cs" />
+    <Compile Include="Runtime\P2InteractionContext.cs" />
+    <Compile Include="Runtime\P2InteractionState.cs" />
+    <Compile Include="Runtime\P2FurnitureAdapter.cs" />
+    <Compile Include="Runtime\P2SnowmobileAdapter.cs" />
+    <Compile Include="Runtime\P2UiState.cs" />
+    <Compile Include="Runtime\SplitScreenDeathState.cs" />
+    <Compile Include="Runtime\VanillaGlobalStateScope.cs" />
+    <Compile Include="Runtime\P2FrameContext.cs" />
+    <Compile Include="Runtime\VanillaAccessors.cs" />
+    <Compile Include="Runtime\P2ToolRunner.cs" />
+    <Compile Include="Runtime\P2StaticLocalPlayerScope.cs" />
+    <Compile Include="Runtime\P2CameraController.cs" />
+    <Compile Include="Runtime\P2ThirdPersonCameraController.cs" />
+    <Compile Include="Runtime\P2ZiplineRopeBuilder.cs" />
+    <Compile Include="Runtime\SplitFramePacing.cs" />
+    <Compile Include="Runtime\FirstPersonVisualRig.cs" />
+    <Compile Include="Main.cs" />
+    <Compile Include="Main.State.cs" />
+    <Compile Include="Main.Rendering.cs" />
+    <Compile Include="Main.Spawn.cs" />
+    <Compile Include="Main.P2Input.cs" />
+    <Compile Include="Main.P2Hotbar.cs" />
+    <Compile Include="Main.P2FillWater.cs" />
+    <Compile Include="Main.P1Ui.cs" />
+    <Compile Include="Main.P2StatHUD.cs" />
+    <Compile Include="Main.P2Backpack.cs" />
+    <Compile Include="Main.P2Menu.cs" />
+    <Compile Include="Main.P2Crafting.cs" />
+    <Compile Include="Main.P2Research.cs" />
+    <Compile Include="Main.P2TradingPost.cs" />
+    <Compile Include="Main.P2Build.cs" />
+    <Compile Include="Main.P2BuildMenu.cs" />
+    <Compile Include="Main.P2BuildPrompt.cs" />
+    <Compile Include="Main.P2UI.cs" />
+    <Compile Include="Main.P2CharacterBox.cs" />
+    <Compile Include="Main.P2InteractionConsume.cs" />
+    <Compile Include="Main.P2Piano.cs" />
+    <Compile Include="Main.Tick.cs" />
+    <Compile Include="Main.UiSanitize.cs" />
+
+    <Compile Include="Patches\Patches.SteamIdHijack.cs" />
+    <Compile Include="Patches\Patches.PlayerContext.cs" />
+    <Compile Include="Patches\Patches.SprinklerFix.cs" />
+    <Compile Include="Patches\Patches.FireEffectP2Distance.cs" />
+    <Compile Include="Patches\Patches.TankTakeWaterP2.cs" />
+    <Compile Include="Patches\Patches.LocalPlayerRouting.cs" />
+    <Compile Include="Patches\Patches.Rendering.cs" />
+    <Compile Include="Patches\Patches.WorldReady.cs" />
+    <Compile Include="Patches\Patches.Input.cs" />
+    <Compile Include="Patches\Patches.Interaction.cs" />
+    <Compile Include="Patches\Patches.HeadTrackingIK.cs" />
+    <Compile Include="Patches\Patches.LocalizationP2.cs" />
+    <Compile Include="Patches\Patches.HookLayer.cs" />
+    <Compile Include="Patches\Patches.LocalCoopMenu.cs" />
+    <Compile Include="Patches\Patches.EnvLightLayer.cs" />
+    <Compile Include="Patches\Patches.BeeHive.cs" />
+    <Compile Include="Patches\Patches.ToolAim.cs" />
+    <Compile Include="Patches\Patches.DeathRespawn.cs" />
+    <Compile Include="Patches\Patches.DeathRespawn.DownedState.cs" />
+    <Compile Include="Patches\Patches.DeathRespawn.Harmony.cs" />
+    <Compile Include="Patches\Patches.DeathRespawn.MenuGate.cs" />
+    <Compile Include="Patches\Patches.DeathRespawn.P1DownedCamera.cs" />
+    <Compile Include="Patches\Patches.DeathRespawn.P2Respawn.cs" />
+    <Compile Include="Patches\Patches.P2Stats.cs" />
+    <Compile Include="Patches\Patches.Sound.cs" />
+    <Compile Include="Patches\Patches.InventoryDrag.cs" />
+    <Compile Include="Patches\Patches.GamepadCursorFix.cs" />
+    <Compile Include="Patches\Patches.P2BackpackGuard.cs" />
+    <Compile Include="Patches\Patches.P2CraftGate.cs" />
+    <Compile Include="Patches\Patches.P2Build.cs" />
+    <Compile Include="Patches\Patches.P2Combat.cs" />
+    <Compile Include="Patches\Patches.P2Hook.cs" />
+    <Compile Include="Patches\Patches.P2Consume.cs" />
+    <Compile Include="Patches\Patches.P2MetalDetector.cs" />
+    <Compile Include="Patches\Patches.P2ToolCallbacks.cs" />
+    <Compile Include="Patches\Patches.P2Region.cs" />
+    <Compile Include="Patches\Patches.P2Fishing.cs" />
+    <Compile Include="Patches\Patches.P2Snowmobile.cs" />
+    <Compile Include="Patches\Patches.P2Vehicle.cs" />
+    <Compile Include="Patches\Patches.P2DeviceFallback.cs" />
+    <Compile Include="Patches\Patches.AnimalCarry.cs" />
+    <Compile Include="Patches\Patches.P2Carry.cs" />
+    <Compile Include="Patches\Patches.P2Zipline.cs" />
+    <Compile Include="Patches\Patches.SmelterRecycle.cs" />
+    <Compile Include="Main.P2Bed.cs" />
+    <Compile Include="Main.P2Seat.cs" />
+    <Compile Include="Main.P2Snowmobile.cs" />
+    <Compile Include="Patches\Patches.SeatPose.cs" />
+    <Compile Include="Main.P2Binoculars.cs" />
+    <Compile Include="Main.P2AnimalCarry.cs" />
+    <Compile Include="Patches\Patches.Firework.cs" />
+    <Compile Include="Patches\Patches.P2Piano.cs" />
+    <Compile Include="Patches\Patches.StorageFix.cs" />
+    <Compile Include="Patches\Patches.MainMenuCharacter.cs" />
+    <Compile Include="Patches\Patches.ResourceRegen.cs" />
+    <Compile Include="Patches\Patches.P1RaycastDiagnostics.cs" />
+    <Compile Include="Patches\Patches.RadioCoroutineDiag.cs" />
+    <Compile Include="Properties\AssemblyInfo.cs" />
+  </ItemGroup>
+  <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" />
+</Project>
