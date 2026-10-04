@@ -34,6 +34,7 @@ namespace SplitScreen
         readonly Slot _p1SelectedSlot;
         readonly ItemInstance _p1SelectedSlotItem;
         readonly string _p2HeldSignature;
+        bool _heldMirrored;   // P1 选中槽是否已被换成 P2 手持物(只有换过才需要在 Dispose 里还原)
         bool _disposed;
 
         public static P2InteractionContext InventoryOnly()
@@ -51,6 +52,9 @@ namespace SplitScreen
             _p2 = Main.player2;
             _savedBusy = PlayerItemManager.IsBusy;
             _originalScope = P2OriginalScope.Interaction();
+            // 从这里起已持有 scope:后续任何一步抛异常都要先回滚再抛,否则没人能 Dispose。
+            try
+            {
             _inventoryScope = new P2InventoryScope();
 
             if (routeRaycastables)
@@ -71,7 +75,16 @@ namespace SplitScreen
                 var p2Held = Main.GetP2HeldHotbarItem();
                 _p2HeldSignature = Main.ItemSig(p2Held);
                 if (_p1SelectedSlot != null)
+                {
                     _p1SelectedSlot.itemInstance = p2Held != null ? p2Held.Clone() : null;
+                    _heldMirrored = true;
+                }
+            }
+            }
+            catch
+            {
+                Dispose();
+                throw;
             }
         }
 
@@ -166,7 +179,7 @@ namespace SplitScreen
             if (_disposed) return;
             _disposed = true;
 
-            if (_p1SelectedSlot != null)
+            if (_heldMirrored)
             {
                 if (Main.ItemSig(_p1SelectedSlot.itemInstance) != _p2HeldSignature)
                     Main.SetP2HeldHotbarItem(_p1SelectedSlot.itemInstance);

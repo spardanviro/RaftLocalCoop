@@ -200,8 +200,22 @@ namespace SplitScreen
             _p2PianoPressed.Remove(instrument);
         }
 
+        // P1 的鼠标视角此刻是否本应开着(没坐着、没睡、没倒地、没开菜单)。
+        // P2 退出钢琴/椅子时只在这种情况下才去恢复它,否则会把原版给 P1 关掉的视角误开回来。
+        static bool P1LookShouldBeFree()
+        {
+            var p1 = player1;
+            if (p1 == null || p1.PlayerScript == null) return false;
+            if (P1AttachedForPianoRestore()) return false;
+            if (p1.PlayerScript.IsDead) return false;
+            if (p1.BedComponent != null && p1.BedComponent.Sleeping) return false;
+            return CanvasHelper.ActiveMenu == MenuType.None;
+        }
+
         internal static void CloseP2PianoUi()
         {
+            // ClearP2Seat 对任何椅子都会调到这里;P2 根本没开过钢琴 UI 时不该碰任何全局/P1 状态。
+            if (!_p2PianoUiOpen && _p2PianoObjects.Count == 0 && _p2PianoInstrument == null) return;
             LogP2Piano("Close UI instrument=" + SafeName(_p2PianoInstrument) + " cloneCanvas=" + CanvasInfo(_p2PianoCloneCanvas));
             var canvas = ComponentManager<CanvasHelper>.Value;
             var gm = canvas != null ? canvas.GetMenu(MenuType.Piano) : null;
@@ -224,7 +238,7 @@ namespace SplitScreen
             }
             ResetP2PianoNote();
             SetP2PianoButtonScales(false, false, false);
-            if (player1 != null && player1.PlayerScript != null && !P1AttachedForPianoRestore())
+            if (P1LookShouldBeFree())
                 player1.PlayerScript.SetMouseLookScripts(true);
             _p2PianoUiOpen = false;
             _p2PianoInstrument = null;
@@ -496,10 +510,14 @@ namespace SplitScreen
             {
                 canvas.CloseMenu(MenuType.Piano);
             }
-            Helper.SetCursorVisibleAndLockState(false, CursorLockMode.Locked);
-            if (SimpleMonoBehaviourSingleton<CustomInputConfig>.Instance != null)
-                SimpleMonoBehaviourSingleton<CustomInputConfig>.Instance.SwitchCurrentActionMap("Player");
-            if (player1 != null && player1.PlayerScript != null)
+            // P1 自己开着菜单时,光标和 ActionMap 归 P1 的菜单管,不能替它锁光标/切回 Player。
+            if (CanvasHelper.ActiveMenu == MenuType.None)
+            {
+                Helper.SetCursorVisibleAndLockState(false, CursorLockMode.Locked);
+                if (SimpleMonoBehaviourSingleton<CustomInputConfig>.Instance != null)
+                    SimpleMonoBehaviourSingleton<CustomInputConfig>.Instance.SwitchCurrentActionMap("Player");
+            }
+            if (P1LookShouldBeFree())
                 player1.PlayerScript.SetMouseLookScripts(true);
         }
 
@@ -673,7 +691,6 @@ namespace SplitScreen
                     player2.PersonController.controller.enabled = true;
             }
             // 进琴时不再改视角,故这里也无需还原(见 EnsureP2PianoUi 处注释)。
-            Helper.SetCursorVisibleAndLockState(false, CursorLockMode.Locked);
             RestoreGlobalInputAfterP2Piano();
         }
 

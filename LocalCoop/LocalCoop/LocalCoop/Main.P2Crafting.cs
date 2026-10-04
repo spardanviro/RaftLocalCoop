@@ -8,31 +8,31 @@ namespace SplitScreen
 {
     public static partial class Main
     {
-        
-        
-        
+        // ══════════════════════════════════════════════════════════════════
+        //  P2 制造 —— 混合方案：把【真原版制造面板(CraftingMenu.Value)】搬到 P2 右半屏，
+        //  与背包一同显示，自建光标驱动；分类分组/材料明细/制造逻辑全部复用原版。
         //
-        
-        
-        
-        
-        
-        
+        //  不设 CanvasHelper.ActiveMenu（保持 None → P1 自由）；SelectedRecipeBox.Update 原本
+        //  只在 ActiveMenu==Inventory 才刷新材料/可制造态 → 用 Patch_SelectedRecipeBox_Update
+        //  在 P2 背包打开时【临时】把 ActiveMenu 设为 Inventory 仅在该方法内生效。
+        //  制造：CraftingMenu.CraftItem() 从单例 PlayerInventory(已 swap 成 P2 背包)消耗+产出。
+        //  限制：材料只算 P2 背包(单例)，不含 P2 自建热栏；CreativeMode 分类不纳入循环。
+        // ══════════════════════════════════════════════════════════════════
         static CraftingMenu _p2CraftMenu;
         static GameObject _p2CraftMenuGo;
         static GameObject _p2SelectedRecipeBoxGo;
-        static int          _p2CraftCatIdx = 2;          
-        static RecipeMenuSubItem _p2HoverSub;            
-        static SkinMenuItem      _p2HoverSkin;           
+        static int          _p2CraftCatIdx = 2;          // 默认 Tools
+        static RecipeMenuSubItem _p2HoverSub;            // 当前吸附到的配方子项(每个变体一个 UiMagnet)
+        static SkinMenuItem      _p2HoverSkin;           // 当前命中的皮肤项(明细面板里)
         static BuildingUI_Costbox_Sub_Crafting _p2HoverCraftCost;
         static readonly FieldInfo P2QuickCraftButtonField =
             typeof(BuildingUI_Costbox_Sub_Crafting).GetField("quickCraftButton", BindingFlags.Instance | BindingFlags.NonPublic);
         const float P2CraftScrollSpeed = 1.5f;
-        
-        const float P2MagnetRadiusPx = 90f;              
-        const float P2MagnetPullSpeed = 450f;            
-        const float P2MagnetEscape = 2000f;              
-        const float P2MagnetCenterThr = 8f;              
+        // 原版 GamepadCursor 磁吸参数(屏幕像素，乘画布 scaleFactor 适配相机画布)
+        const float P2MagnetRadiusPx = 90f;              // 进入吸附的半径
+        const float P2MagnetPullSpeed = 450f;            // 朝中心拉拽速度
+        const float P2MagnetEscape = 2000f;              // 摇杆挣脱系数
+        const float P2MagnetCenterThr = 8f;              // 足够近则直接吸到中心
 
         internal static bool IsP2CraftingOpen => _p2CraftMenu != null && _p2CraftMenu.gameObject.activeInHierarchy;
         internal static bool IsP2CraftingMenu(CraftingMenu menu) => menu != null && _p2CraftMenu != null && menu == _p2CraftMenu;
@@ -490,8 +490,8 @@ namespace SplitScreen
             if (sr != null && Mathf.Abs(ry) > 0.15f)
                 sr.verticalNormalizedPosition = Mathf.Clamp01(sr.verticalNormalizedPosition + ry * P2CraftScrollSpeed * Time.unscaledDeltaTime);
 
-            
-            
+            // 原版式磁吸(GamepadCursor.AfterUpdate 同款)：找半径内最近的配方子项中心，
+            //  摇杆小 → 朝它【渐进拉拽/吸到中心】；摇杆用力推 → 挣脱自由移动。命中/吸附即可选中(含变体)。
             _p2HoverSub = null;
             var parent = _p2CraftMenu.recipeMenuItemParent;
             var pr = _p2InvCursor.parent as RectTransform;
@@ -509,7 +509,7 @@ namespace SplitScreen
                     if (sub.recipeItem == null) continue;
                     var rt = sub.transform as RectTransform;
                     if (rt == null) continue;
-                    
+                    // 吸附目标用【图标方框 item_bg】的中心 = 图标正中心(子项容器中心会偏到图标右下角)。
                     var iconRt = (sub.item_bg != null) ? sub.item_bg.rectTransform : rt;
                     Vector2 c = RectTransformUtility.WorldToScreenPoint(_p2UiCamera, iconRt.TransformPoint(iconRt.rect.center));
                     if (viewportRt != null && !RectTransformUtility.RectangleContainsScreenPoint(viewportRt, c, _p2UiCamera)) continue;
@@ -521,10 +521,10 @@ namespace SplitScreen
                 var chosen = hit ?? nearest;
                 if (chosen != null)
                 {
-                    _p2HoverSub = chosen;                            
+                    _p2HoverSub = chosen;                            // 选中目标(可制造项/变体)
                     Vector2 stick = gp.leftStick.ReadValue();
                     float escape = P2MagnetEscape * scale;
-                    if (bestDiff.sqrMagnitude >= (stick * escape).sqrMagnitude)   
+                    if (bestDiff.sqrMagnitude >= (stick * escape).sqrMagnitude)   // 摇杆不足以挣脱 → 吸附
                     {
                         float thr = P2MagnetCenterThr * scale;
                         Vector2 target = (bestDiff.sqrMagnitude > thr * thr)
@@ -536,7 +536,7 @@ namespace SplitScreen
                 }
             }
 
-            
+            // 皮肤项命中(明细面板里有多皮肤时)：命中即可按 A 切换皮肤，并吸附到其中心。
             _p2HoverSkin = null;
             var box = _p2CraftMenu.selectedRecipeBox;
             if (box != null && box.gameObject.activeInHierarchy)
@@ -604,7 +604,7 @@ namespace SplitScreen
             if (visible) button.interactable = CanP2QuickCraft(costSlot.item, ActiveP2CraftPlayerInventory());
         }
 
-        
+        // A：若光标命中皮肤项 → 切换皮肤。返回 true 表示已处理。
         static bool P2CraftTrySelectSkin()
         {
             if (_p2HoverSkin == null || _p2CraftMenu == null || _p2CraftMenu.selectedRecipeBox == null) return false;
@@ -664,8 +664,8 @@ namespace SplitScreen
             return true;
         }
 
-        
-        
+        // A：若光标悬停在配方上 → 选中该配方(弹材料明细)。返回 true 表示已处理(不再当作背包点击)。
+        //  不能用 RecipeMenuItem.OnClickItemText()(它写死 .Value/PC 版)；直接对当前(手柄版)菜单 SelectRecipe。
         static bool P2CraftTrySelectHovered()
         {
             if (_p2CraftMenu == null || _p2HoverSub == null) return false;
@@ -687,7 +687,7 @@ namespace SplitScreen
             return true;
         }
 
-        
+        // X：制造当前选中的配方（仅当材料足够 craftButton.interactable）。
         static void P2CraftTryCraft()
         {
             if (_p2CraftMenu == null) return;

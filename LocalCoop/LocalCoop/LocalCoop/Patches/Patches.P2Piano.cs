@@ -123,5 +123,5 @@ namespace SplitScreen
             Main.LogV("[P1Piano] 钢琴前切视角 thirdPerson=" + tp.ThirdPersonState);
         }
     }
-
+                // 注：设备内部的 ReselectCurrentSlot 已被 Patch_Hotbar_ReselectCurrentSlot_P2 抑制，P1 手持模型不受影响。
 }

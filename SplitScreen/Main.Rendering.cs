@@ -9,7 +9,7 @@ namespace SplitScreen
 {
     public static partial class Main
     {
-        
+        // ── GetArmMesh ────────────────────────────────────────────────────
         static FieldInfo armMeshField;
 
         public static SkinnedMeshRenderer GetArmMesh(CharacterModelModifications cmm)
@@ -38,7 +38,7 @@ namespace SplitScreen
             return null;
         }
 
-        
+        // ── Layer 动态分配 ────────────────────────────────────────────────
         static bool AllocateLayers()
         {
             var free = new List<int>();
@@ -68,7 +68,7 @@ namespace SplitScreen
             LAYER_P2_HAND = free[2];
             LAYER_P1_BODY = free[3];
             LAYER_P1_NOTEBOOK = LAYER_P1_TOOL;
-            p1HandCameraLayer = LayerMask.NameToLayer("HandCamera"); 
+            p1HandCameraLayer = LayerMask.NameToLayer("HandCamera"); // 原生 FP 手部层(24)
             LogV(
                 $"[Layer] Allocated — P1_HAND={LAYER_P1_HAND} P1_TOOL={LAYER_P1_TOOL} " +
                 $"P2_HAND={LAYER_P2_HAND} P1_BODY={LAYER_P1_BODY} P1_NOTEBOOK(alias P1_TOOL)={LAYER_P1_NOTEBOOK}");
@@ -383,7 +383,7 @@ namespace SplitScreen
             LogV($"Split rects set | LocalPlayerLayer={p1LocalPlayerLayer} | depths P1={player1.Camera?.depth}/{player1.HandCamera?.depth} P2={player2.Camera?.depth}/{player2.HandCamera?.depth}");
         }
 
-        
+        // ── 渲染配置：Layer ──────────────────────────────────────────────
         public static void ConfigureRendering()
         {
             var log = ModEntry.Logger;
@@ -445,8 +445,18 @@ namespace SplitScreen
             return mask;
         }
 
+        static int _lightMaskScanFrame = -100000;
+
+        // 给每帧路径用:灯光掩码补丁是幂等的,最多 120 帧做一次全场景扫描。
+        static void EnsureSplitLightingMasksThrottled()
+        {
+            if (Time.frameCount - _lightMaskScanFrame < 120) return;
+            EnsureSplitLightingMasks();
+        }
+
         internal static void EnsureSplitLightingMasks()
         {
+            _lightMaskScanFrame = Time.frameCount;
             int mask = SplitLightingLayerMask();
             foreach (var lt in Object.FindObjectsOfType<Light>())
                 if ((lt.cullingMask & mask) != mask)
@@ -478,15 +488,15 @@ namespace SplitScreen
 
             if (arm != null)
             {
-                
-                
+                // 手臂只在第一人称显示；若分屏开始时 P1 已处于第三人称，则隐藏手臂，
+                //  避免 FP 手臂模型 + TP 全身模型同时出现。FP/TP 运行时切换由游戏 SetArmMeshState 处理。
                 arm.gameObject.SetActive(!isTPNow);
                 if (!isTPNow)
                     SetLayerRecursively(arm.transform, LAYER_P1_HAND);
                 LogV($"P1: armMesh active={!isTPNow} -> layer={LAYER_P1_HAND}");
             }
 
-            
+            // FP 工具放回原生 HandCamera 层(24)以恢复原生渲染/受光；TP 时随身体走 P1_BODY。
             int initialHandLayer = isTPNow ? LAYER_P1_BODY : p1HandCameraLayer;
             if (player1.leftHandParent != null)
             {
@@ -525,11 +535,11 @@ namespace SplitScreen
                 SetLayerRecursively(t.GetChild(i), layer);
         }
 
-        
-        
+        // 同 SetLayerRecursively,但跳过 except 子树(被搬运动物的 objectToParent)—— 保留其原层,
+        //  避免被搬到玩家手部层(LAYER_P1_HAND/P1_BODY)→ 在自己视角置顶/随视角动、放下残留无光照、FP 不显示、无法再交互。
         static void SetLayerRecursivelyExcept(Transform t, int layer, Transform except)
         {
-            if (except != null && t == except) return;     
+            if (except != null && t == except) return;     // 被搬运物子树:保留原层(世界可见受光 + 可再交互)
             t.gameObject.layer = layer;
             for (int i = 0; i < t.childCount; i++)
                 SetLayerRecursivelyExcept(t.GetChild(i), layer, except);
@@ -566,10 +576,10 @@ namespace SplitScreen
             return false;
         }
 
-        
-        
-        
-        
+        // 取某玩家当前搬运动物【实际挂到手上的 transform】。动物搬运(AI_NetworkBehaviour_Domestic.
+        //  SetStartCarriedOffsets)把 stateMachine_Domestic.transform 直接挂到 player.rightHandParent。
+        //  这里从 CarryingComponent.CarriedObject(Carry)向上走到 rightHandParent 的【直接子物】= 被搬动物根。
+        //  结构无关、精确;平时不搬运(IsCarrying=false)直接返回 null,零开销。
         static Transform GetCarriedParentedTransform(Network_Player p)
         {
             if (p == null || p.rightHandParent == null) return null;
@@ -577,14 +587,14 @@ namespace SplitScreen
             if (cc == null || !cc.IsCarrying || cc.CarriedObject == null) return null;
             var rhp = p.rightHandParent;
             var t = cc.CarriedObject.transform;
-            while (t != null && t.parent != rhp) t = t.parent;   
+            while (t != null && t.parent != rhp) t = t.parent;   // 上溯到 rhp 的直接子物
             return t;
         }
 
-        
-        
-        
-        
+        // ── P1 搬运动物:强制用 TP offset(每帧持久覆盖)──────────────────
+        //  P1 在 FP 时 vanilla 用 FP offset(carryPosOffset,贴 FP 相机)→ 大型动物(羊驼)模型怼进 P1 的 FP 相机;
+        //  且 P2 看 P1 的【第三人称身体】时动物贴脸(错)。P2 搬运用 TP offset(贴身体手部)双视角都正常 → P1 照做。
+        //  每帧覆盖(盖过 vanilla SetStartCarriedOffsets/OnPerspectiveSwap 设的 FP offset)。
         static FieldInfo s_tpCarryPos, s_tpCarryRot;
         static void ForceP1CarryTPOffset(Transform p1Carried)
         {
@@ -604,7 +614,7 @@ namespace SplitScreen
             p1Carried.localEulerAngles = (Vector3)s_tpCarryRot.GetValue(dom);
         }
 
-        
+        // ── 每帧：确保 P1 的 Mesh 状态正确 ─────────────────────────────
         internal static void EnforceMeshStates()
         {
             if (player1.currentModel == null) return;
@@ -613,9 +623,9 @@ namespace SplitScreen
             player1ArmMesh = FirstPersonVisualRig.GetArm(player1);
             player2ArmMesh = FirstPersonVisualRig.GetArm(player2);
 
-            
-            
-            
+            // 每帧取一次 P1 渲染器到【复用缓冲】(模型/工具动态增删 → 不可跨帧缓存;但 List 重载先 Clear 再填、
+            //  复用容器 → 消除每帧 Renderer[] 分配);设层与下方收集共用,省掉对同一模型的第二次全层级遍历。
+            // 搬运中:动物挂到玩家 rightHandParent → 会被下面的层级遍历卷进身体/手部层。按【实际挂载 transform】排除。
             Transform p1Carried = GetCarriedParentedTransform(player1);
             ForceP1CarryTPOffset(p1Carried);
             RefreshRendererCachesIfNeeded();
@@ -649,9 +659,9 @@ namespace SplitScreen
                 player1ThirdPerson = player1.GetComponentInChildren<ThirdPerson>();
             bool p1IsTP = player1ThirdPerson != null && player1ThirdPerson.ThirdPersonState;
 
-            
-            
-            
+            // P1 望远镜:举镜强制 FP(否则从拉远 TP 相机放大);并每帧纠正 FP 手臂 active —
+            //  vanilla 望远镜收起协程会无条件 SetArmMeshState(true) 点亮 FP 手臂,在 TP 下残留(切 V 才消)。
+            //  规则:FP 手臂仅在 (FP 且 非举镜) 时显示;举镜期一律隐藏(对齐 vanilla 干净镜中视野)。
             EnforceP1Binoculars(p1IsTP);
             bool p1Fp = !p1IsTP && !P1BinocActive;
             if (p1Fp) FirstPersonVisualRig.MountForFirstPerson(player1);
@@ -743,7 +753,7 @@ namespace SplitScreen
             EnforceP2FpArms();
         }
         static readonly System.Collections.Generic.List<Renderer> _p2BodyRenderers = new System.Collections.Generic.List<Renderer>();
-        
+        // EnforceMeshStates 每帧 GetComponentsInChildren 的复用缓冲(List 重载先 Clear 再填 → 不分配新数组)。
         static readonly System.Collections.Generic.List<Renderer> _p1RendBuf = new System.Collections.Generic.List<Renderer>();
         static readonly System.Collections.Generic.List<Renderer> _p2RendBuf = new System.Collections.Generic.List<Renderer>();
         static readonly System.Collections.Generic.List<Renderer> _p1ModelRenderers = new System.Collections.Generic.List<Renderer>();
@@ -840,10 +850,10 @@ namespace SplitScreen
         static RemoteVisualState _p2RemoteVisualForP1;
         static FieldInfo _fullBodyHazmatField;
 
-        
-        
-        
-        
+        // P2 第一人称手臂 + 手持工具(镜像 P1)：FP 时激活 FP 手臂网格(player2ArmMesh)并连同手持工具(handParent 子树)
+        //  放到 LAYER_P2_HAND —— 该层只被 P2.HandCamera 渲染(P2/P1 主相机均排除)，故只有 P2 自己以第一人称看到手臂+工具，
+        //  且不会和"对 P1 可见的第三人称全身手臂"重叠。TP 时关掉 FP 手臂网格、工具还原原层(随全身正常显示)。
+        //  手臂姿态由当前 thirdPersonController 驱动(与 P1 同：P1 也是强制 TP 控制器 + 保留 FP 手臂网格)。
         static void EnforceP2FpArms()
         {
             if (player2 == null || player2.currentModel == null) return;
@@ -878,17 +888,18 @@ namespace SplitScreen
                 if (fp && Time.frameCount >= _nextP2ToolLayerRefreshFrame)
                     SetLayerRecursively(player2ArmMesh.transform, LAYER_P2_HAND);
             }
-             
-             
+            // 手持工具(handParent)默认放 LAYER_P2_HAND(P2 自己第一人称看)；P1 跨视图要看到 P2 手上工具 →
+            //  逐相机在 OnCameraPreCull 临时改层(SetP2ToolLayerForCamera)。这里给个每帧默认(FP=LAYER_P2_HAND，TP=原层)。
             SetP2ToolLayer(fp ? LAYER_P2_HAND : -1);
 
-            
-            
-            
-            
+            // FOV 同步：原版 CharacterModelModifications.Update 只给本地玩家(P1)按设置 FOVSlider 设主相机 FOV，
+            //  P2(远程克隆)永不更新 → 两半屏 FOV 不一致。这里每帧把 P1 的 FOV 镜像到 P2(主相机+手部相机)，
+            //  使设置里的 FOV 对两人同时生效、视野一致。
+            //  例外:P2 举望远镜时由 P2Binoculars 缩放 P2 主相机 FOV → 主相机同步避让(否则每帧把缩放覆盖回 P1)。
             if (player1 != null)
             {
-                if (!P2BinocActive && player1.Camera != null && player2.Camera != null
+                // P1 举望远镜/全屏看笔记本时,相机 FOV 是原版的临时值,不能抄给 P2。
+                if (!P2BinocActive && !P1BinocActive && !_nbFullscreenActive && player1.Camera != null && player2.Camera != null
                     && !Mathf.Approximately(player2.Camera.fieldOfView, player1.Camera.fieldOfView))
                     player2.Camera.fieldOfView = player1.Camera.fieldOfView;
                 if (player1.HandCamera != null && player2.HandCamera != null
@@ -897,9 +908,9 @@ namespace SplitScreen
             }
         }
 
-        
+        // P2 鱼线等"非 handParent"的手持附加渲染物(由钓竿补丁每帧填充)：随手持工具一起逐相机切层，让 P1 跨视图也能看到。
         internal static readonly System.Collections.Generic.List<Transform> P2FishingExtra = new System.Collections.Generic.List<Transform>();
-        
+        // P1 鱼线：本人 FP 时在 LAYER_P1_HAND(P1.HandCamera 渲染)；P2 相机渲染前搬到 P1 身体的 LocalPlayer 层 → P2 跨视图看到(镜像 P2 做法)。
         internal static readonly System.Collections.Generic.List<Transform> P1FishingExtra = new System.Collections.Generic.List<Transform>();
         internal static void SetP1FishingLayer(int layer)
         {
@@ -914,7 +925,7 @@ namespace SplitScreen
             var lhp = player2.leftHandParent;  var rhp = player2.rightHandParent;
             int lLayer = layer >= 0 ? layer : (_p2LeftHandOrigLayer  >= 0 ? _p2LeftHandOrigLayer  : (lhp != null ? lhp.gameObject.layer : 0));
             int rLayer = layer >= 0 ? layer : (_p2RightHandOrigLayer >= 0 ? _p2RightHandOrigLayer : (rhp != null ? rhp.gameObject.layer : 0));
-            
+            // P2 搬运动物时排除其子树(否则被卷进 P2 手部层 → 同 P1 之前的图层错乱)。
             Transform p2Carried = GetCarriedParentedTransform(player2);
             bool refresh = Time.frameCount >= _nextP2ToolLayerRefreshFrame
                            || _p2ToolLayerCache != layer
@@ -931,7 +942,7 @@ namespace SplitScreen
 
             if (lhp != null) SetLayerRecursivelyKeepColliders(lhp, lLayer, p2Carried);
             if (rhp != null) SetLayerRecursivelyKeepColliders(rhp, rLayer, p2Carried);
-            
+            // 鱼线物跟手持工具同样逐相机切层(用左手原层作 P2 身体层；P1 相机=可见，P2 相机=LAYER_P2_HAND)。
             for (int i = 0; i < P2FishingExtra.Count; i++)
                 if (P2FishingExtra[i] != null) SetLayerRecursively(P2FishingExtra[i], lLayer);
         }
@@ -1014,7 +1025,7 @@ namespace SplitScreen
 
             if (!player2.currentModel.gameObject.activeSelf)
                 player2.currentModel.gameObject.SetActive(true);
-
+            // 诊断日志：每次 InitializeComponents 之后都报告关键组件状态
             try
             {
                 player2.currentModel.SetFullBodyMeshState(true);
@@ -1308,7 +1319,7 @@ namespace SplitScreen
             var thirdPerson = player != null ? player.GetComponentInChildren<ThirdPerson>() : null;
             if (thirdPerson == null || !thirdPerson.ThirdPersonState)
                 FirstPersonVisualRig.MountForFirstPerson(player);
-
+                // 注：设备内部的 ReselectCurrentSlot 已被 Patch_Hotbar_ReselectCurrentSlot_P2 抑制，P1 手持模型不受影响。
         }
 
         internal static void RestoreP2WorldVisualState()
@@ -1369,7 +1380,7 @@ namespace SplitScreen
                 SetP2ToolLayer(LAYER_P2_HAND);
             HideP2FirstPersonArmsForWorldView();
             SetP2BodyVisible(true);
-            EnsureSplitLightingMasks();
+            EnsureSplitLightingMasksThrottled();   // 每帧路径:节流,别每帧 FindObjectsOfType
         }
 
         internal static void ApplyEquippedHeadVisuals(Network_Player np)
@@ -1533,7 +1544,7 @@ namespace SplitScreen
                 if (p2FirstPerson) FirstPersonVisualRig.BeginCarriedAnimalTpForOtherView(player2);   // 对方视角搬运动物按TP摆
                 BeginHideP2FirstPersonArmsForP1WorldView();
                 if (P2IsDownedOrCarried) EnforceP2DownedWorldVisual();
-                SetP2BodyVisible(true);   
+                SetP2BodyVisible(true);   // P1 相机始终能看到 P2 全身(跨视图)
                 if (ShouldHideP2CarriedBodyForP1Fp())
                 {
                     SetP2BodyVisible(false);
@@ -1553,7 +1564,7 @@ namespace SplitScreen
                 if (P2ZiplineDriver.IsAttached)
                     ZiplineRenderFix.BeginRemoteVisual(player2, RemotePlayerLayer(), out _p2RemoteZiplineVisual);
 
-                
+                // 动画已 apply、渲染前：消除头骨动画对 FP 相机俯仰的干扰（日记打开时跳过）。
                 EnforceP1CameraPitch();
                 RecalculateP1FreeLookSeatTpCameraBeforeRender();
 
@@ -1614,7 +1625,7 @@ namespace SplitScreen
                 if (p2Sleeping || p2BedRestoring)
                     RestoreP2WorldVisualState();
                 if (p2Downed) EnforceP2DownedWorldVisual();
-                SetP2BodyVisible(!p2FirstPerson);   
+                SetP2BodyVisible(!p2FirstPerson);   // FP 时对【P2 相机】隐藏自己的全身/脸；TP 时正常可见
                 
                 
                 if (p2Sleeping) SetP2ToolLayer(-1);
@@ -1729,14 +1740,14 @@ namespace SplitScreen
             }
         }
 
-        
+        // P1 是否被 AttachPlayer 承载(坐椅子等)——StartCarryingPlayer 对本地玩家置 IsAttached=true。
         static bool P1Attached =>
             player1 != null && player1.PlayerNetworkManager != null && player1.PlayerNetworkManager.IsAttached;
         static bool P1OnZipline =>
             player1 != null && player1.ZiplinePlayer != null && player1.ZiplinePlayer.IsAttachedToZipline;
         static float p1SeatPivotYSaved;
         static bool  p1SeatPivoted;
-        static bool  _p1SeatLookLocked;   
+        static bool  _p1SeatLookLocked;   // P1 坐椅子时已锁 mouseLook(进/出座椅边沿切换,见 EnforceP1CameraPitch)
         static ZiplineRenderFix.RemoteVisualState _p1RemoteZiplineVisual;
         static ZiplineRenderFix.RemoteVisualState _p2RemoteZiplineVisual;
         static MethodInfo _p1ThirdPersonHandleMethod;
@@ -1754,7 +1765,7 @@ namespace SplitScreen
 
             if (_p1ThirdPersonHandleMethod == null)
                 _p1ThirdPersonHandleMethod = typeof(ThirdPerson).GetMethod("HandleThirdPerson", BindingFlags.Instance | BindingFlags.NonPublic);
-
+            // 诊断日志：每次 InitializeComponents 之后都报告关键组件状态
             try
             {
                 _p1ThirdPersonHandleMethod?.Invoke(player1ThirdPerson, null);
@@ -1765,7 +1776,7 @@ namespace SplitScreen
             }
         }
 
-        
+        // ── 渲染后：还原临时层迁移 + P1 playerPivot.x ───────────────────
         static void OnCameraPostRender(Camera cam)
         {
             if (player1 == null || player2 == null) return;
@@ -1786,7 +1797,7 @@ namespace SplitScreen
                 RestoreP2FirstPersonArmsAfterP1WorldView();
                 RestoreP2RemoteVisualForP1View();
                 FirstPersonVisualRig.RestoreCarriedAnimalTpForOtherView();
-                if (p2FirstPerson) RestoreP2SpineForP1View();   
+                if (p2FirstPerson) RestoreP2SpineForP1View();   // 还原 P2 脊椎/俯仰 → P2 自己相机仍用 playerPivot pitch 驱动手臂
                 if (p1LocalPlayerLayer >= 0)
                 {
                     bool p1IsTP = player1ThirdPerson != null && player1ThirdPerson.ThirdPersonState;
@@ -1816,7 +1827,7 @@ namespace SplitScreen
             if (p1LocalPlayerLayer >= 0)
             {
                 SetP1BodyRenderLayer(LAYER_P1_BODY);
-                SetP1FishingLayer(LAYER_P1_HAND);   
+                SetP1FishingLayer(LAYER_P1_HAND);   // P2 相机渲染完，把 P1 鱼线还原回仅 P1 可见的手部层
             }
             RestoreP1EquipmentForP2View();
             FirstPersonVisualRig.RestoreCarriedAnimalTpForOtherView();
@@ -1825,25 +1836,25 @@ namespace SplitScreen
             if (player1.playerPivot != null && !(player1.BedComponent != null && player1.BedComponent.Sleeping))
             {
                 var e = player1.playerPivot.localEulerAngles;
-                
+                // 坐椅子时 PreCull 覆盖了 y(钉向座椅前方),这里连同 x 一起还原原值,避免泄漏给后续帧/P1 逻辑。
                 float restY = p1SeatPivoted ? p1SeatPivotYSaved : e.y;
                 p1SeatPivoted = false;
                 player1.playerPivot.localEulerAngles = new Vector3(p1PivotXSaved, restY, e.z);
             }
         }
 
-        
-        
-        
-        
-        
-        
-        
-        
-        static PostProcessingProfile _survivalFx;     
+        // ── 饥渴(生存)后处理特效的分屏隔离 + P2 独立特效 ──────────────────────
+        //  PlayerStats.HandleUIFeedback(仅 P1 跑)改【全局】PostProcessingProfile(Settings.graphicsBox.postEffects)的
+        //  vignette/chromaticAberration/colorGrading。P1、P2 两相机的 PostProcessingBehaviour 默认都引用这同一个 profile →
+        //  P1 改 → 两屏都受影响。靠"渲染时分时改同一 profile"不可靠(PostProcessingBehaviour.OnPreCull 实例回调与
+        //  Camera.onPreCull 静态事件的相对顺序不保证 → 仍会串)。
+        //  正解(物理隔离, 与渲染顺序无关)：给 P2 相机一份【独立 profile 副本】, P2 的 PlayerStats 写副本、P1 写全局原 profile。
+        //   两个 ScriptableObject 互不影响。P2 的 Update 被 early-return(不自动跑 HandleUIFeedback)→ 在 Patch_PlayerStats_Update_P2
+        //   的 P2 分支每帧手动驱动一次(写副本)。
+        static PostProcessingProfile _survivalFx;     // 全局原 profile (P1 用)
         static PostProcessingProfile _p1Profile;      
-        static PostProcessingProfile _p2Profile;      
-        
+        static PostProcessingProfile _p2Profile;      // P2 专属副本 (运行时 Instantiate, 独立)
+        // _p2Stats 复用 Main.P2StatHUD.cs 中已声明的字段(同一 partial class)。
         static MethodInfo _miHandleUIFeedback;
         static FieldInfo _fiPostEffects;
 
@@ -1891,21 +1902,21 @@ namespace SplitScreen
             _survivalFx = null;
         }
 
-        
+        // 给 P2 相机(主相机 + 手部相机)的后处理换成独立副本, 并让 P2 的 PlayerStats 写这个副本。幂等。
         static void SetupP2PostFxProfile()
         {
             if (player2 == null) return;
             SetupSplitPostFxProfiles();
 
-            
-            
+            // 只换【P2 主相机】的后处理 profile。HandCamera 是 clearFlags=Depth 的叠加相机(渲染 FP 手臂/工具)，
+            //  若也给它 profile 会让它对叠加层【再跑一遍后处理】→ 双重处理使画面发暗。保持其游戏原始配置。
             SetCameraProfile(player2.Camera, _p2Profile);
 
             if (_p2Stats == null) _p2Stats = player2.Stats;
             SetStatsProfile(_p2Stats, _p2Profile);
         }
 
-        
+        // 把某相机上的 PostProcessingBehaviour.profile 指向 p。返回是否找到 behaviour。
         static bool SetCameraProfile(Camera cam, PostProcessingProfile p)
         {
             if (cam == null) return false;
@@ -1940,17 +1951,17 @@ namespace SplitScreen
             }
         }
 
-        
+        // 每帧(在 P2 的 PlayerStats.Update 之后)驱动一次 P2 的饥渴特效 → 写入 P2 副本(不碰全局/P1)。
         internal static void DriveP2SurvivalFx(PlayerStats p2Stats)
         {
             if (p2Stats == null) return;
             _p2Stats = p2Stats;
-            SetupP2PostFxProfile();   
+            SetupP2PostFxProfile();   // 幂等: 确保副本已建且绑定
             if (_miHandleUIFeedback == null)
                 _miHandleUIFeedback = typeof(PlayerStats).GetMethod("HandleUIFeedback", BindingFlags.Instance | BindingFlags.NonPublic);
             try { _miHandleUIFeedback?.Invoke(p2Stats, null); }
             catch (System.Exception e) { LogV("[P2PostFx] HandleUIFeedback ignored: " + e.Message); }
         }
-
+                // 注：设备内部的 ReselectCurrentSlot 已被 Patch_Hotbar_ReselectCurrentSlot_P2 抑制，P1 手持模型不受影响。
     }
 }

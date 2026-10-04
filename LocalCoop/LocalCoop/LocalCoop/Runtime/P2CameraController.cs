@@ -57,7 +57,7 @@ namespace SplitScreen
         {
             var gp = Main.GetP2BoundGamepad();
             if (gp == null) return;
-
+            // 对齐原版：用手柄 View(切换界面键 = selectButton)切第一/第三人称。
             bool press = gp.selectButton.isPressed;
             if (Main.P2IsDownedOrCarried)
             {
@@ -301,6 +301,6 @@ namespace SplitScreen
             var e = Main.player2.playerPivot.localEulerAngles;
             Main.player2.playerPivot.localEulerAngles = new Vector3(0f, e.y, e.z);
         }
-
+                // 注：设备内部的 ReselectCurrentSlot 已被 Patch_Hotbar_ReselectCurrentSlot_P2 抑制，P1 手持模型不受影响。
     }
 }

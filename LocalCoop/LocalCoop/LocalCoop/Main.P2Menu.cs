@@ -9,18 +9,18 @@ namespace SplitScreen
 {
     public static partial class Main
     {
-        
-        
+        // ══════════════════════════════════════════════════════════════════
+        //  通用 P2 菜单宿主
         //
-        
-        
-        
-        
-        
-        
-        
-        
-        
+        //  所有菜单都走统一入口 CanvasHelper.OpenMenu / OpenMenuCloseOther，且每个菜单的面板都挂在
+        //  GameMenu.menuObjects 上。故做一套通用宿主：P2(设备上下文 isProcessingP2Ray)开任意菜单时——
+        //   1. 调 gameMenu.Open() 激活面板(设备自身 Open 流程已设占用标志)；
+        //   2. 把 menuObjects 搬到 P2 半屏画布(居中)；
+        //   3. 用 P2 虚拟光标 + uGUI GraphicRaycaster + ExecuteEvents 通用驱动(任意 Button/Slot/可点元素)；
+        //   4. 跳过原版 OpenMenu 的【P1 全局副作用】(ActiveMenu/锁光标/切输入)，P1 不被冻结；
+        //   5. B 关闭 → CanvasHelper.CloseMenu(触发 MenuCloseEvent → 设备清理占用) + 还原面板。
+        //  这样凡走 OpenMenu 的设备 UI(研究台/染色台/衣柜/交易站…)自动在 P2 半屏可用，无需逐个适配。
+        // ══════════════════════════════════════════════════════════════════
         static bool _p2MenuOpen;
         static MenuType _p2MenuType;
         static CanvasHelper _p2MenuCanvasHelper;
@@ -40,8 +40,8 @@ namespace SplitScreen
         static readonly MethodInfo s_wardrobeOutfitButtonPressedMethod =
             typeof(WardrobeMenu).GetMethod("OutfitButtonPressed", BindingFlags.Instance | BindingFlags.Public);
 
-        
-        
+        // 菜单关闭那一帧也要锁住 P2 的跳/蹲/冲刺：B 关菜单的同一帧，PersonController 若在 TickP2Menu(关菜单)之后
+        //  运行，会把这次 B 读成蹲下 → 退出时人物蹲一下。用关闭帧号把锁延到关闭帧(+1)覆盖任意执行顺序。
         static int _p2MenuClosedFrame = -1000;
         static bool _p2SuppressMenuCloseButton;
         internal static bool IsP2MenuInputLocked
@@ -58,11 +58,11 @@ namespace SplitScreen
             }
         }
 
-        
-        
-        
-        
-        
+        // ── 菜单宿主策略：哪些 MenuType 才搬 P2 半屏 ──────────────────────────
+        //  黑名单(不拦截，交回原版/各自专门处理)：
+        //   - 全局/单人专属：PauseMenu/Cheat/Cutscene/ChatField/TextWriter —— 绝不搬 P2(避免 P2 工具/设备误触发把暂停/过场塞到 P2 半屏)。
+        //   - 已有专门通道：BuildMenu(Main.P2BuildMenu)、Inventory(Main.P2Backpack)、DeathMenu(P2 自有死亡处理)。
+        //  其余(PaintMenu/TradingPost/FishingBait/Wardrobe/Piano/Journal 及未来设备菜单)默认放行 → 搬 P2 半屏。
         static readonly HashSet<MenuType> _p2MenuBlacklist = new HashSet<MenuType>
         {
             MenuType.PauseMenu, MenuType.Cheat, MenuType.Cutscene, MenuType.ChatField,
@@ -141,7 +141,7 @@ namespace SplitScreen
             if (!_p2MenuOpen) return;
             
             _p2BaitItems.Clear();
-            _p2MenuClosedFrame = Time.frameCount;   
+            _p2MenuClosedFrame = Time.frameCount;   // 锁住本帧(+1)的 P2 跳/蹲，避免关菜单的 B 漏成蹲下
             _p2SuppressMenuCloseButton = true;
             var canvas = _p2MenuCanvasHelper; var type = _p2MenuType;
             _p2MenuOpen = false; _p2MenuCanvasHelper = null; _p2MenuHover = null;
@@ -697,11 +697,11 @@ namespace SplitScreen
             _p2MenuRaycaster = _p2HudCanvas.GetComponent<GraphicRaycaster>() ?? _p2HudCanvas.gameObject.AddComponent<GraphicRaycaster>();
         }
 
-        
-        
-        
-        
-        const float P2BaitMenuYOffset = 180f;   
+        // ── 鱼饵菜单(原版风格：按住 LT 打开、松开关闭；左摇杆左右切换，切到即装备) ──────────────
+        //  原版 FishingRod：按住 RMB(=P2 LT/ActionContext)打开 FishingBait 菜单、松开关闭(FishingRod.Update)。
+        //  UI_Cost_Interactable_FishingBait 显式屏蔽 Pointer 事件 → 通用虚拟光标点不动 → 这里专门做左右导航 + 直接 EquipBait。
+        //  不用 A/B(=跳/蹲，会漏触发)：左右切换即时 EquipBait + 刷新浮标模型，松开 LT 关闭。
+        const float P2BaitMenuYOffset = 180f;   // 准心(屏幕中心)上方一点
         static readonly List<UI_Cost_Interactable_FishingBait> _p2BaitItems = new List<UI_Cost_Interactable_FishingBait>();
         static int _p2BaitIndex;
         static bool _p2BaitStickNeutral = true;
@@ -709,7 +709,7 @@ namespace SplitScreen
         static MeshRenderer _p2BobberRenderer;
         static MeshFilter _p2BobberFilter;
         static FieldInfo _fBobberRend, _fBobberFilt;
-        static FieldInfo _fHoverImage;   
+        static FieldInfo _fHoverImage;   // UI_Cost_Interactable.hoverImage(protected) —— 真正可见的高亮框
 
         static void SetupP2BaitMenu()
         {
@@ -717,8 +717,8 @@ namespace SplitScreen
             foreach (var root in _p2BaitClones)
                 if (root != null)
                     _p2BaitItems.AddRange(root.GetComponentsInChildren<UI_Cost_Interactable_FishingBait>(true));
-            
-            
+            // 不预排序：导航时按【实时屏幕 X】找方向上的相邻项(见 TickP2BaitMenu)，自洽不依赖列表顺序/相机朝向，避免左右颠倒。
+            // 缓存 P2 鱼竿的浮标渲染器/网格 → 切饵时即时刷新浮标模型(否则要等菜单关闭 FishingRod.Update 才刷)。
             _p2Rod = player2 != null ? player2.GetComponentInChildren<FishingRod>(true) : null;
             if (_p2Rod != null)
             {
@@ -731,7 +731,7 @@ namespace SplitScreen
                 _p2BobberRenderer = _fBobberRend?.GetValue(_p2Rod) as MeshRenderer;
                 _p2BobberFilter   = _fBobberFilt?.GetValue(_p2Rod) as MeshFilter;
             }
-            
+            // 索引初始化到当前已装备的鱼饵
             var cur = player2 != null && player2.FishingBaitHandler != null ? player2.FishingBaitHandler.CurrentBait : null;
             _p2BaitIndex = 0;
             for (int i = 0; i < _p2BaitItems.Count; i++)
@@ -754,8 +754,8 @@ namespace SplitScreen
             {
                 var bb = _p2BaitItems[i].backgroundButton;
                 if (bb != null && bb.image != null) bb.image.sprite = (i == idx) ? hoover : normal;
-                
-                
+                // 真正可见的高亮是 hoverImage：原版 OnEnable/OnClick 把它点在已装备项上，导航不动它 → 看着"第一个一直高亮"。
+                //  这里让 hoverImage 跟随当前导航项。
                 var hi = _fHoverImage?.GetValue(_p2BaitItems[i]) as GameObject;
                 if (hi != null) hi.SetActive(i == idx);
             }
@@ -767,10 +767,10 @@ namespace SplitScreen
             var item = _p2BaitItems[idx];
             var bait = item.baitToEquip;
             int count = bait == null ? 1 : CountP2Bait(bait);
-            if (count <= 0) return;   
+            if (count <= 0) return;   // 没有该鱼饵 → 不选(每次导航都会触发，不打日志)
             player2.FishingBaitHandler.EquipBait(bait);
             UI_Cost_Interactable_FishingBait.currentSelected = item;
-            
+            // 即时刷新浮标(鱼钩)模型——否则要等菜单关闭、FishingRod.Update 本地分支才刷新，体感"没立即切换"。
             if (_p2BobberRenderer != null && _p2BobberFilter != null)
                 player2.FishingBaitHandler.SetBaitModelFromCurrentBait(_p2BobberRenderer, _p2BobberFilter);
             RefreshP2BaitItemCounts();
@@ -800,7 +800,7 @@ namespace SplitScreen
             if (_p2BaitItems.Count == 0) return;
 
             float x = gp.leftStick.ReadValue().x;
-            int dir = 0;   
+            int dir = 0;   // +1 = 向屏幕右、-1 = 向屏幕左
             bool right = gp.dpad.right.wasPressedThisFrame || (x > 0.5f && _p2BaitStickNeutral);
             bool left  = gp.dpad.left.wasPressedThisFrame  || (x < -0.5f && _p2BaitStickNeutral);
             if (right) dir = 1;
@@ -810,26 +810,26 @@ namespace SplitScreen
 
             if (dir != 0)
             {
-                
-                
+                // 按【画布本地 X】找该方向上最近的相邻鱼饵：右 → 本地 X 更大者中最近的；左 → 更小者中最近的。
+                //  画布本地 X 即视觉左右(+X=右)，与相机朝向无关 → 恒"看哪边按哪边"，不会左右颠倒。
                 float curX = BaitVisualX(_p2BaitIndex);
                 int best = -1; float bestD = float.MaxValue;
                 for (int i = 0; i < _p2BaitItems.Count; i++)
                 {
                     if (i == _p2BaitIndex) continue;
-                    float signed = (BaitVisualX(i) - curX) * dir;   
+                    float signed = (BaitVisualX(i) - curX) * dir;   // 目标方向上为正
                     if (signed > 0.1f && signed < bestD) { bestD = signed; best = i; }
                 }
                 if (best >= 0)
                 {
                     _p2BaitIndex = best;
                     HighlightP2Bait(best);
-                    SelectP2Bait(best);   
+                    SelectP2Bait(best);   // 切到即装备 + 刷新浮标(即时反馈)
                 }
             }
         }
 
-        
+        // 鱼饵项在 P2 画布本地空间的 X(+X=视觉右)，与相机无关 → 导航方向稳定不颠倒。
         static float BaitVisualX(int idx)
         {
             if (idx < 0 || idx >= _p2BaitItems.Count || _p2BaitItems[idx] == null) return 0f;
@@ -837,7 +837,7 @@ namespace SplitScreen
             return _p2HudCanvas != null ? _p2HudCanvas.transform.InverseTransformPoint(t).x : t.x;
         }
 
-        
+        // 每帧(Runtime.Tick)：菜单打开时驱动光标 + 通用 uGUI 事件(hover/click)。
         internal static void TickP2Menu()
         {
             if (!_p2MenuOpen) return;
@@ -846,7 +846,7 @@ namespace SplitScreen
             if (_p2MenuType == MenuType.TradingPost) { TickP2TradingPost(); return; }
             var gp = GetP2BoundGamepad(); if (gp == null) return;
 
-            if (gp.buttonEast.wasPressedThisFrame) { CloseP2Menu(); return; }   
+            if (gp.buttonEast.wasPressedThisFrame) { CloseP2Menu(); return; }   // B 返回
 
             Vector2 stick = gp.leftStick.ReadValue(); if (stick.sqrMagnitude < 0.02f) stick = Vector2.zero;
             _p2InvCursorPos += stick * P2BpCursorSpeed * Time.unscaledDeltaTime;

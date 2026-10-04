@@ -49,12 +49,12 @@ namespace SplitScreen
 
         internal static bool P2IsCarrying => P2CarriedObject != null || _p2CarriedPlayer != null;
 
-        
+        // 瞄准动物(由 InteractionRouter 调,未搬运时):提示 + 按 X 搬起。
         internal static void HandleP2Carry(Carry carry, SplitScreenRuntime rt)
         {
             if (carry == null || player2 == null || rt == null) return;
             if (carry.carryingPlayer != null || !carry.AllowCarry) { rt.UI.HidePrompt(); return; }
-            if (Time.time < _p2CarryCooldownUntil) { rt.UI.HidePrompt(); return; }   
+            if (Time.time < _p2CarryCooldownUntil) { rt.UI.HidePrompt(); return; }   // 刚放下:冷却内不可再搬(防重抓)
             rt.UI.ShowPrompt("Interact", Helper.GetTerm("Game/CarryAnimal"));
             if (rt.P2.ActionInteract?.WasPressedThisFrame() == true)
             {
@@ -72,7 +72,7 @@ namespace SplitScreen
             }
         }
 
-        
+        // 每帧(SplitScreenRuntime.Tick):搬运中按 X 放下。返回 true 表示 P2 正在搬(门控其余交互)。
         internal static bool TickP2Carry(SplitScreenRuntime rt)
         {
             if (TickP2PlayerCarry(rt)) return true;
@@ -95,7 +95,7 @@ namespace SplitScreen
                 catch (System.Exception e) { ModEntry.Logger.Log("[P2Carry] 放下异常: " + e.Message); }
                 SuppressP2CrouchOnExit();
                 _p2CarryCooldownUntil = Time.time + CarryCooldown;
-                RefreshP2HeldItem();   
+                RefreshP2HeldItem();   // 复位 P2 手臂动画(否则卡搬运姿势,需切工具才恢复)
             }
             return true;
         }

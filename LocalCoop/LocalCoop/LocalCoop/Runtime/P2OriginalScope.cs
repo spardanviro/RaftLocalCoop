@@ -3,8 +3,8 @@ using System.Reflection;
 
 namespace SplitScreen
 {
-    
-    
+    // P2 当前所处的原版执行上下文。统一替代分散的 p2UsingItemActive / P2BuildToolActive /
+    //  _p2FillWaterActive / isProcessingP2Ray 等标志，便于补丁统一判断 Main.P2Mode。
     public enum P2OriginalMode
     {
         None,
@@ -16,18 +16,18 @@ namespace SplitScreen
         FillWater
     }
 
-    
-    
+    // ══════════════════════════════════════════════════════════════════════
+    //  P2OriginalScope — P2 原版执行代理 scope
     //
-    
-    
+    //  在很短的窗口内让原版代码"以为当前操作者是 P2"，执行完立即恢复 P1：
+    //    using (P2OriginalScope.Tool()) { /* 原版工具/物品/菜单逻辑 */ }
     //
-    
-    
-    
-    
-    
-    
+    //  scope 内：
+    //   · PlayerContext.Active = P2 → ComponentManager<Network_Player/Player/PlayerInventory>.Value 都返回 P2(scope 直接换入 CM 背后字段;早期的 getter 补丁已废弃,见下方字段注释)
+    //   · Network_Player.isLocalPlayer 私有字段 = true → 原版的本地玩家门控通过
+    //   · Main.P2Mode = 对应模式 → AimRay/输入补丁据此把相机/按键指向 P2
+    //  Dispose 恢复(每个 scope 自存旧值，支持嵌套；不用静态 bool，避免多补丁互踩)。
+    // ══════════════════════════════════════════════════════════════════════
     public sealed class P2OriginalScope : IDisposable
     {
         readonly P2OriginalMode _prevMode;
@@ -67,6 +67,11 @@ namespace SplitScreen
 
             PlayerContext.Active = _p2;
             Main.P2Mode          = mode;
+
+            // 上面两行已经改了全局状态。后面任何一步抛异常,对象都不会返回给 using,
+            // 所以必须在这里自己回滚,否则 P2 上下文会漏给 P1。
+            try
+            {
 
             // vanilla 读的是 ComponentManager<T>.Value,直接把三件套换成 P2 的。
             // 生成 P2 期间不介入(那时正在建立 P2 本身,换了会自指)。
@@ -116,6 +121,12 @@ namespace SplitScreen
                 _prevBusyRaw = (bool)_isBusyField.GetValue(null);
                 _isBusyField.SetValue(null, false);
                 _busyNeutralized = true;
+            }
+            }
+            catch
+            {
+                Dispose();
+                throw;
             }
         }
 

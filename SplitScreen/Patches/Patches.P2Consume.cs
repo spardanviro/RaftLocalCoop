@@ -18,6 +18,9 @@ namespace SplitScreen
             AccessTools.Method(typeof(Inventory), "RemoveItem", new[] { typeof(string), typeof(int) });
 
         static IEnumerable<CodeInstruction> Transpiler(IEnumerable<CodeInstruction> insns)
+            => TranspilerGuard.Verify(insns, TranspilerCore);
+
+        static IEnumerable<CodeInstruction> TranspilerCore(IEnumerable<CodeInstruction> insns)
         {
             var router = AccessTools.Method(typeof(Patch_PlantManager_PlantSeed_P2SeedConsume), nameof(RouteSeedRemove));
             foreach (var ins in insns)

@@ -59,6 +59,9 @@ namespace SplitScreen
 
         void Open()
         {
+            // 暂停面板不与其他 P2 菜单叠开:Close() 会无条件恢复 gameplay,
+            // 叠开再关会让 P2 带着打开的背包走动。
+            if (Main.IsP2BackpackOpen || Main.IsP2BuildMenuOpen || Main.IsP2MenuOpen || _runtime.P2.IsUsingMenu) return;
             if (!EnsurePanel()) return;
             _isOpen = true;
             _panel.SetActive(true);

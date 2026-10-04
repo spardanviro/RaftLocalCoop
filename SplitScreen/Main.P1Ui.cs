@@ -6,16 +6,16 @@ namespace SplitScreen
 {
     public static partial class Main
     {
-        
-        
+        // ══════════════════════════════════════════════════════════════════
+        //  P1 UI 搬到左半屏 —— 专用 UI 相机 + CanvasScaler 自适应
         //
-        
-        
-        
-        
-        
-        
-        
+        //  - 专用 UI 相机：rect=左半屏，clearFlags=Depth（叠加在主相机画面上、
+        //    最后渲染），cullingMask=仅 UI 层 → UI 永远在最上，不被 3D 穿插。
+        //  - 把所有 ScreenSpaceOverlay 的根 Canvas 改成 ScreenSpaceCamera 绑这个相机
+        //    → 整套 UI（HUD/背包/暂停/死亡/聊天等）渲染进左半屏。
+        //  - CanvasScaler(ScaleWithScreenSize, match=0 按宽) 按左半屏像素自适应、不变形。
+        //  - 跳过 WorldSpace（笔记本，自带相机）和 Graphy 调试图表。
+        // ══════════════════════════════════════════════════════════════════
         static bool _p1UiMoved;
         static Camera _p1UiCamera;
 
@@ -26,10 +26,10 @@ namespace SplitScreen
 
             if (_p1UiCamera == null)
                 _p1UiCamera = new GameObject("P1_UICamera").AddComponent<Camera>();
-            _p1UiCamera.clearFlags    = CameraClearFlags.Depth;     
-            _p1UiCamera.cullingMask   = 1 << 5;                     
+            _p1UiCamera.clearFlags    = CameraClearFlags.Depth;     // 叠加，不清色
+            _p1UiCamera.cullingMask   = 1 << 5;                     // 仅 UI 层
             ApplySplitViewport(_p1UiCamera, false); 
-            _p1UiCamera.depth         = player1.Camera.depth + 10f; 
+            _p1UiCamera.depth         = player1.Camera.depth + 10f; // 最后渲染（最上层）
             _p1UiCamera.nearClipPlane = 0.1f;
             _p1UiCamera.farClipPlane  = 20f;
 
@@ -37,7 +37,7 @@ namespace SplitScreen
             foreach (var canvas in Object.FindObjectsOfType<Canvas>())
             {
                 if (!canvas.isRootCanvas) continue;
-                if (canvas.renderMode != RenderMode.ScreenSpaceOverlay) continue; 
+                if (canvas.renderMode != RenderMode.ScreenSpaceOverlay) continue; // 跳过 WorldSpace(笔记本)
                 if (canvas.name.Contains("Graphy")) continue;
                 if (canvas.name.Contains("P2_")) continue;
 
@@ -70,11 +70,11 @@ namespace SplitScreen
 
         internal static void ResetP1Ui() => _p1UiMoved = false;
 
-        
-        
-        
-        
-        
+        // ── P2 开背包时把主 UI 画布临时切回全屏 Overlay ───────────────────
+        //  原版手柄虚拟光标 / 拖拽图标 / UI 射线全部假定 ScreenSpaceOverlay(全屏像素坐标)。
+        //  分屏把 _CanvasGame_New 改成了 ScreenSpaceCamera(左半屏) → 光标/拖拽坐标全乱。
+        //  P2 开背包期间临时切回 Overlay → 光标/拖拽/点击全部按原版正常工作；关闭后还原左半屏相机。
+        //  (P2 菜单期间 P1 已被切到 UI 动作图、无法游戏，全屏背包可接受。)
         static Canvas _gameCanvas;
         static RenderMode _gameCanvasModeSaved;
         static Camera _gameCanvasCamSaved;
@@ -140,8 +140,8 @@ namespace SplitScreen
             if (p1.PlayerScript != null && p1.PlayerScript.IsDead)
                 return;
 
-            
-            
+            // 睡觉中：用头骨(cameraHolder)的位置+朝向 = 躺姿视角(随全身躺动画),与 P2 同款。
+            //  否则下面 mouseLook 覆盖会把视角冻结在入睡前朝向(常朝脚) → 视角与头部不一致。
             if (p1.BedComponent != null && p1.BedComponent.Sleeping && p1.Camera != null)
             {
                 var tp = player1ThirdPerson != null ? player1ThirdPerson : p1.GetComponentInChildren<ThirdPerson>();
@@ -158,7 +158,7 @@ namespace SplitScreen
                 return;
             }
 
-            
+            // 起身:还原 mouseLook(坐椅子时被锁过)。即使座椅 disableMouseLook=false、StopCarrying 不还原,也由此恢复。
             if (!P1Attached && _p1SeatLookLocked && p1.PlayerScript != null)
             { p1.PlayerScript.SetMouseLookScripts(true); _p1SeatLookLocked = false; }
 
@@ -199,9 +199,9 @@ namespace SplitScreen
                 return;
             }
 
-            
-            
-            
+            // 坐椅子中:相机锁死(放头部 + 朝座椅前方),不随 mouseLook 转 —— 对齐 P2 坐姿固定视角。
+            //  进入边沿关 mouseLook(防 root 偏航漂移 + 起身跳变);朝向用座椅挂点 forward(随木筏转,与 P2 视野里
+            //  被钉向座椅前方的身体一致)。P1 自己看不到身体,此处只锁相机。
             if (P1Attached && p1.Camera != null)
             {
                 var tp = player1ThirdPerson != null ? player1ThirdPerson : p1.GetComponentInChildren<ThirdPerson>();

@@ -5,11 +5,11 @@ using UltimateWater;
 
 namespace SplitScreen
 {
-    
-    
+    // ══════════════════════════════════════════════════════════════════════
+    //  Patch 22: SoundManager.HandleUnderWaterFilter — P2 水下音效
     //
-    
-    
+    //  P1 或 P2 任一入水则开滤镜，两者均出水才关滤镜。
+    // ══════════════════════════════════════════════════════════════════════
     [HarmonyPatch(typeof(SoundManager), "HandleUnderWaterFilter")]
     static class Patch_SoundManager_HandleUnderWaterFilter
     {

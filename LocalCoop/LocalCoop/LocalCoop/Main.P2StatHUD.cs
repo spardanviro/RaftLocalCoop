@@ -7,27 +7,27 @@ namespace SplitScreen
 {
     public static partial class Main
     {
-        
-        
-        
-        
-        
-        
-        
-        
+        // ══════════════════════════════════════════════════════════════════
+        //  P2 数值条 HUD —— 克隆原版 UI，渲染到"右半屏专用 UI 相机"(与 P1 左半屏同样的缩放方式)。
+        //  - 血/饥/渴：克隆原版 "Stat sliders" 面板(UISlider_Stat)，每帧 SetValue 驱动。
+        //  - 氧气：克隆原版 OxygenMeter(fatigueParent 径向扇形表)，独立材质实例，按 SetFatigueSlider 逻辑驱动
+        //          (顶部居中、扇形百分比)；独立材质避免污染 P1 的氧气表。
+        //  画布为 ScreenSpaceCamera 绑右半屏相机 + CanvasScaler match=0 → 与 P1 左半屏完全相同的缩放比例；
+        //  保留原版锚点(不再 +0.5 平移)，由相机 rect 自动落在右半屏。
+        // ══════════════════════════════════════════════════════════════════
         static Canvas _p2HudCanvas;
         internal static bool HasP2HudCanvas => _p2HudCanvas != null;
         internal static Canvas P2HudCanvas => _p2HudCanvas;
-        static Canvas _p2MenuCanvas;    
+        static Canvas _p2MenuCanvas;    // 全屏菜单(建造菜单)专用：match=1 → 960x1080 逻辑，原版长宽比、铺满半屏
         static Camera _p2UiCamera;
 
-        
-        
+        // 建造菜单等"原本全屏"的菜单需要正确长宽比；_p2HudCanvas 是 match=0(1920x2160 过高)会把
+        // 横版菜单挤到顶部。这里用 match=1(按高)→ 逻辑 960x1080，菜单铺满 P2 半屏。
         internal static Canvas EnsureP2MenuCanvas()
         {
             if (_p2UiCamera == null) return null;
-            
-            
+            // 每次都重新绑定相机：_p2MenuCanvas 是 DontDestroyOnLoad 缓存，重开分屏后 _p2UiCamera 会重建，
+            // 旧引用变成已销毁(null) → ScreenSpaceCamera 退化成 ScreenSpaceOverlay(满屏) → 菜单铺满全屏。
             if (_p2MenuCanvas != null)
             {
                 if (_p2MenuCanvas.worldCamera != _p2UiCamera) _p2MenuCanvas.worldCamera = _p2UiCamera;
@@ -37,13 +37,13 @@ namespace SplitScreen
             Object.DontDestroyOnLoad(_p2MenuCanvas.gameObject);
             _p2MenuCanvas.renderMode    = RenderMode.ScreenSpaceCamera;
             _p2MenuCanvas.worldCamera   = _p2UiCamera;
-            _p2MenuCanvas.planeDistance = 0.85f;        
+            _p2MenuCanvas.planeDistance = 0.85f;        // 比 HUD(1.0) 更近 → 渲染在上层
             _p2MenuCanvas.sortingOrder  = 8;
             var sc = _p2MenuCanvas.gameObject.AddComponent<CanvasScaler>();
             sc.uiScaleMode         = CanvasScaler.ScaleMode.ScaleWithScreenSize;
             sc.referenceResolution = new Vector2(1920f, 1080f);
             sc.screenMatchMode     = CanvasScaler.ScreenMatchMode.MatchWidthOrHeight;
-            sc.matchWidthOrHeight  = 1f;                 
+            sc.matchWidthOrHeight  = 1f;                 // 按高 → 逻辑 960x1080(原版长宽比)
             int uiLayer = LayerMask.NameToLayer("UI"); if (uiLayer >= 0) _p2MenuCanvas.gameObject.layer = uiLayer;
             LogV("[P2Menu] created build menu canvas");
             return _p2MenuCanvas;
@@ -55,14 +55,14 @@ namespace SplitScreen
         static PlayerStats _p2Stats;
         static int _nextP2HudValueFrame;
 
-        
+        // P2 快捷栏（右半屏底部居中，与 P1 同尺寸/位置）：显示 P2 工具列表 + 选中高亮。
         static bool _p2HotbarBuilt;
         static GameObject _p2HotbarGo, _p2KbLayout;
         static Image[] _p2SlotIcons, _p2SlotHighlights, _p2HotbarSlotBg, _p2SlotSliderFills;
         static Text[]  _p2SlotAmount;
         static UnityEngine.UI.Slider[] _p2SlotSliders;
-        static Slot[]  _p2HotbarSlots;   
-        internal static RectTransform[] _p2HotbarSlotRects;   
+        static Slot[]  _p2HotbarSlots;   // 保留的原版 Slot 脚本 → 用 SetItem 原生驱动图标/数量/耐久/水量条
+        internal static RectTransform[] _p2HotbarSlotRects;   // 供背包光标命中检测/拖拽
         static readonly System.Collections.Generic.List<GameObject> _p2GpLayouts = new System.Collections.Generic.List<GameObject>();
         const float HotbarY = 20f;
 
@@ -76,12 +76,12 @@ namespace SplitScreen
 
             if (_p2HudCanvas == null) CreateP2StatHud();
 
-            
+            // 准心 + 视角切换(D-pad 上 = 第一/第三人称)
             EnsureP2Crosshair();
             bool showCross = !P2OwnMenuOpen;
             if (_p2Crosshair != null && _p2Crosshair.gameObject.activeSelf != showCross)
                 _p2Crosshair.gameObject.SetActive(showCross);
-            UpdateP2AimSprite();           
+            UpdateP2AimSprite();           // 准心图标随手持工具/瞄准目标切换(持斧瞄树=砍树图标)
             EnsureP2CameraRig();
             TickP2CameraBootstrap();
             TickP2View();
@@ -94,7 +94,7 @@ namespace SplitScreen
             else if (p2FirstPerson && player2 != null) P2CameraController.ApplyFirstPersonView(player2);
             EnsureP2Prompt();
             UpdateP2Prompt();
-            ExpireP2SteerPrompt();   
+            ExpireP2SteerPrompt();   // 方向盘转向提示:离开方向盘后自动隐藏
 
             bool refreshHudValues = Time.frameCount >= _nextP2HudValueFrame;
             if (refreshHudValues)
@@ -133,7 +133,7 @@ namespace SplitScreen
             UpdateP2Hotbar();
         }
 
-        
+        // ── P2 快捷栏 ─────────────────────────────────────────────────────
         static void UpdateP2Hotbar()
         {
             if (_p2Hotbar == null) return;
@@ -144,18 +144,18 @@ namespace SplitScreen
             int cur = 0;
             var rt = SplitScreenRuntime.Instance;
             if (rt != null && rt.P2 != null) cur = rt.P2.HotbarIndex;
-            if (n > 0) cur = ((cur % n) + n) % n;   
+            if (n > 0) cur = ((cur % n) + n) % n;   // 高亮跟随 HotbarIndex，可落在全部 10 个槽
 
             for (int i = 0; i < n; i++)
             {
                 var item = (i < _p2Hotbar.Length) ? _p2Hotbar[i] : null;
-                
-                
+                // 用原版 Slot.SetItem 驱动 图标/数量/耐久条/水量条(RefreshComponents 原生处理)；
+                //  仅当与当前显示不一致时才 SetItem，避免每帧重克隆。
                 if (_p2HotbarSlots != null && i < _p2HotbarSlots.Length && _p2HotbarSlots[i] != null)
                 {
                     var curInst = _p2HotbarSlots[i].itemInstance;
                     if (!SameHotbarItem(curInst, item))
-                        _p2HotbarSlots[i].SetItem(item);   
+                        _p2HotbarSlots[i].SetItem(item);   // SetItem(null)清空；SetItem(inst)克隆+RefreshComponents
                 }
                 if (_p2SlotHighlights[i] != null && _p2SlotHighlights[i].gameObject.activeSelf != (i == cur))
                     _p2SlotHighlights[i].gameObject.SetActive(i == cur);
@@ -175,27 +175,27 @@ namespace SplitScreen
             return a.UniqueIndex == b.UniqueIndex && a.Amount == b.Amount && a.Uses == b.Uses;
         }
 
-        
-        
-        
-        
+        // 克隆"整套"原版热栏 widget（背景图 + 全部槽位 + 手柄 RB/LB 提示布局），全用原版图片/布局。
+        //  关键：直接 Instantiate 活动的 Hotbar 会触发克隆体 Hotbar/Slot 的 Awake/Start（订阅静态事件 →
+        //  删脚本后悬空引用报错）。故"先把源临时置 inactive 再 Instantiate"，克隆体不跑 Awake；趁 inactive
+        //  删掉逻辑脚本(保留 Image/Text)，强制手柄布局，设 UI 层，再激活。源同帧恢复，P1 热栏不受影响。
         static void BuildP2Hotbar()
         {
             if (_p2HudCanvas == null) return;
             var inv = ComponentManager<PlayerInventory>.Value;
             var hotbar = inv != null ? inv.hotbar : null;
-            if (hotbar == null) return; 
+            if (hotbar == null) return; // 原版热栏未就绪，下帧重试
             int uiLayer = LayerMask.NameToLayer("UI");
 
             var src = hotbar.gameObject;
             bool wasActive = src.activeSelf;
-            src.SetActive(false);                                   
+            src.SetActive(false);                                   // 阻止克隆体 Awake/Start
             var clone = Object.Instantiate(src, _p2HudCanvas.transform);
-            src.SetActive(wasActive);                               
+            src.SetActive(wasActive);                               // 立刻恢复 P1 热栏
             clone.name = "P2_Hotbar";
 
             var cloneHotbar = clone.GetComponent<Hotbar>();
-            
+            // 收集全部槽位的图标/高亮(删脚本前)
             var slots = clone.GetComponentsInChildren<Slot>(true);
             _p2SlotIcons = new Image[slots.Length];
             _p2SlotHighlights = new Image[slots.Length];
@@ -204,21 +204,21 @@ namespace SplitScreen
             _p2HotbarSlotBg = new Image[slots.Length];
             _p2SlotSliders = new UnityEngine.UI.Slider[slots.Length];
             _p2SlotSliderFills = new Image[slots.Length];
-            _p2HotbarSlots = slots;   
+            _p2HotbarSlots = slots;   // 保留 Slot 脚本(StripNonGraphicScripts 已放过 Slot/Slider)
             for (int i = 0; i < slots.Length; i++)
             {
                 _p2SlotIcons[i]       = slots[i].imageComponent;
                 _p2SlotHighlights[i]  = slots[i].imageFocused;
-                _p2SlotSliders[i]     = slots[i].sliderComponent;             
+                _p2SlotSliders[i]     = slots[i].sliderComponent;             // 耐久条
                 _p2SlotSliderFills[i] = slots[i].sliderFillComponent;
-                _p2HotbarSlotRects[i] = slots[i].transform as RectTransform;   
-                _p2HotbarSlotBg[i]    = slots[i].GetComponent<Image>();        
+                _p2HotbarSlotRects[i] = slots[i].transform as RectTransform;   // 槽位 rect（命中检测）
+                _p2HotbarSlotBg[i]    = slots[i].GetComponent<Image>();        // 槽位底图（悬停高亮）
                 var amtT = FindChildByName(slots[i].transform, "AmountText");
                 if (amtT != null) _p2SlotAmount[i] = amtT.GetComponent<Text>();
             }
-            
-            
-            
+            // 诊断证实手柄布局(gamepadLayoutLb/Rb 等)不是热栏子物体，不在克隆体内 → 下方单独克隆 RB/LB 进 widget。
+            //  键盘布局(keyboardLayout, 含 Tab/T 等键盘键位提示)若是克隆体的子物体则关掉它(手柄不显示键盘提示)；
+            //  仅关“克隆体内”的(IsChildOf clone)，绝不碰 P1 原件。
             _p2GpLayouts.Clear();
             var kb = LayoutGo(cloneHotbar, "keyboardLayout");
             bool kbChild = kb != null && kb.transform.IsChildOf(clone.transform);
@@ -226,12 +226,12 @@ namespace SplitScreen
             _p2KbLayout = kbChild ? kb : null;
             if (_p2KbLayout != null) _p2KbLayout.SetActive(false);
 
-            StripNonGraphicScripts(clone);                          
-            
+            StripNonGraphicScripts(clone);                          // 删 Hotbar 等逻辑脚本，保留 Image/Text/Slot/Slider
+            // 保留了 Slot 脚本(带点击/悬停接口)；禁用克隆体所有图形的 raycastTarget，防 P1 鼠标误触发 Slot 事件(inventory=null→NRE)。
             foreach (var g in clone.GetComponentsInChildren<Graphic>(true)) g.raycastTarget = false;
             if (uiLayer >= 0) SetLayerRecursively(clone.transform, uiLayer);
 
-            var rt = clone.transform as RectTransform;              
+            var rt = clone.transform as RectTransform;              // 整套 widget 移到右半屏底部居中
             if (rt != null)
             {
                 rt.anchorMin = rt.anchorMax = new Vector2(0.5f, 0f);
@@ -243,7 +243,7 @@ namespace SplitScreen
             _p2HotbarGo = clone;
             foreach (var hl in _p2SlotHighlights) if (hl != null) hl.gameObject.SetActive(false);
 
-            
+            // 手柄 RB/LB 提示不在热栏子树里 → 从 P1 原件单独克隆进 P2 widget，按其相对 P1 热栏根的偏移定位。
             CloneGamepadHintToWidget(hotbar, clone, "gamepadLayoutLb", uiLayer);
             CloneGamepadHintToWidget(hotbar, clone, "gamepadLayoutRb", uiLayer);
 
@@ -251,12 +251,12 @@ namespace SplitScreen
             LogV($"[P2HUD] cloned vanilla hotbar slots={slots.Length}");
         }
 
-        
+        // 把 P1 的某个手柄提示对象(gamepadLayoutLb/Rb)克隆进 P2 widget，定位到它相对 P1 热栏根的偏移处，强制显示。
         static void CloneGamepadHintToWidget(Hotbar hotbar, GameObject widget, string field, int uiLayer)
         {
             var src = LayoutGo(hotbar, field);
             if (src == null) { ModEntry.Logger.Log($"[P2HUD] 未找到 {field}"); return; }
-            Vector3 lp = hotbar.transform.InverseTransformPoint(src.transform.position); 
+            Vector3 lp = hotbar.transform.InverseTransformPoint(src.transform.position); // 相对 P1 热栏根的局部点
             var clone = Object.Instantiate(src, widget.transform);
             clone.name = "P2_" + field;
             var rt = clone.transform as RectTransform;
@@ -268,10 +268,10 @@ namespace SplitScreen
             LogV($"[P2HUD] cloned {field} to P2 widget, localPos={lp}");
         }
 
-        
-        
-        
-        
+        // 删除非 Graphic 的 MonoBehaviour(逻辑脚本)，保留 Image/Text 等可视组件。
+        // 剥离逻辑脚本，但【保留 Slot 与 Slider】：Slot 的 Awake/Start/OnEnable 安全(无静态事件订阅、
+        //  不引用 playerNetwork)，其 SetItem→RefreshComponents 能原生驱动 图标/数量/耐久条/水量条；
+        //  Slider 是 Selectable(非 Graphic)，若一并销毁则耐久/水量条无法显示。真正有问题的是 Hotbar 脚本。
         static void StripNonGraphicScripts(GameObject root)
         {
             foreach (var mb in root.GetComponentsInChildren<MonoBehaviour>(true))
@@ -279,9 +279,9 @@ namespace SplitScreen
                     Object.Destroy(mb);
         }
 
-        
-        
-        
+        // ── P2 建造提示 UI(独立于 P1)───────────────────────────────────────
+        //  P2 的 BlockCreator.Update 本会往共享(P1)HUD 写提示；补丁改为转发到这里(SetP2Prompt)，
+        //  在 P2 半屏底部独立显示，不影响 P1。
         static Text _p2PromptText;
         static readonly string[] _p2Prompts = new string[8];
         static int _p2PromptFrame;
@@ -315,9 +315,9 @@ namespace SplitScreen
             go.SetActive(false);
         }
 
-        
-        
-        
+        // ── P2 拾取提示(右下角，克隆原版 InventoryPickupMenuItem：+N + 物品图标 + 名称 + 棕色底) ──────────
+        //  原版 InventoryPickup.ShowItem 弹在共享 HUD(P1 半屏)；P2 拾取被屏蔽以免污染 P1。
+        //  这里把原版 menuItemPrefab 克隆若干份到 P2 半屏右下角的容器，复用原版 SetItem(图标/名称/+N + 自带淡出/堆叠)。
         const int P2PickupPoolSize = 6;
         static InventoryPickupMenuItem[] _p2PickupPool;
         static RectTransform _p2PickupContainer;
@@ -327,12 +327,12 @@ namespace SplitScreen
             if (_p2PickupPool != null || _p2HudCanvas == null) return;
             var src = Object.FindObjectOfType<InventoryPickup>();
             var prefab = src != null ? src.menuItemPrefab : null;
-            if (prefab == null) return;   
+            if (prefab == null) return;   // 原版拾取系统还没好 → 下次再试
 
             var containerGo = new GameObject("P2_PickupContainer", typeof(RectTransform));
             _p2PickupContainer = containerGo.GetComponent<RectTransform>();
             _p2PickupContainer.SetParent(_p2HudCanvas.transform, false);
-            _p2PickupContainer.anchorMin = _p2PickupContainer.anchorMax = new Vector2(1f, 0f);   
+            _p2PickupContainer.anchorMin = _p2PickupContainer.anchorMax = new Vector2(1f, 0f);   // 右下角
             _p2PickupContainer.pivot = new Vector2(1f, 0f);
             _p2PickupContainer.anchoredPosition = new Vector2(-30f, 80f);
             int uiLayer = LayerMask.NameToLayer("UI");
@@ -343,9 +343,9 @@ namespace SplitScreen
                 var clone = Object.Instantiate(prefab, _p2PickupContainer);
                 clone.name = "P2_PickupItem" + i;
                 clone.gameObject.SetActive(false);
-                
-                
-                
+                // 把每个提示项的 RectTransform 锚点/轴心钉到【右下】，使 localPosition.x=0 时其右边缘贴住容器原点
+                //  (容器在屏幕右下、距右边缘 30px)。原版 prefab 的轴心非右对齐 → 放到右锚容器会向右溢出屏幕。
+                //  仅改自身轴心/锚点(不改 sizeDelta)，内部图标/文字按各自锚点布局不变；其 Update 只调 y 不动 x。
                 var crt = clone.GetComponent<RectTransform>();
                 if (crt != null)
                 {
@@ -359,7 +359,7 @@ namespace SplitScreen
             LogV("[P2HUD] created P2 pickup prompt pool");
         }
 
-        
+        // 由 InventoryPickup.ShowItem 补丁在 P2 拾取上下文调用 —— 复刻原版 InventoryPickup.ShowItem 行为。
         internal static void ShowP2PickupToast(string uniqueItemName, int amount)
         {
             EnsureP2PickupPool();
@@ -367,16 +367,16 @@ namespace SplitScreen
             var item = ItemManager.GetItemByName(uniqueItemName);
             if (item == null) return;
 
-            
+            // 现有可见项 index++(向上堆叠)。
             InventoryPickupMenuItem first = null;
             for (int i = 0; i < _p2PickupPool.Length; i++)
             {
                 var it = _p2PickupPool[i];
                 if (it == null) continue;
                 if (it.gameObject.activeInHierarchy) it.index++;
-                else if (first == null) first = it;     
+                else if (first == null) first = it;     // 第一个空闲项
             }
-            if (first == null)   
+            if (first == null)   // 全占用 → 复用 index 最大(最旧)的那个
             {
                 int maxIdx = -1;
                 for (int i = 0; i < _p2PickupPool.Length; i++)
@@ -384,16 +384,16 @@ namespace SplitScreen
             }
             if (first == null) return;
 
-            first.rect.localPosition = new Vector3(0f, -2f * first.rect.sizeDelta.y, 0f);   
+            first.rect.localPosition = new Vector3(0f, -2f * first.rect.sizeDelta.y, 0f);   // 从底部滑入
             first.gameObject.SetActive(true);
-            first.SetItem(item, amount);   
+            first.SetItem(item, amount);   // 原版：+N + 名称 + 图标 + alpha=1 + 3.5s 后自动淡出
             first.index = 0;
         }
 
         static void UpdateP2Prompt()
         {
             if (_p2PromptText == null) return;
-            if (Time.frameCount - _p2PromptFrame > 3)   
+            if (Time.frameCount - _p2PromptFrame > 3)   // 建造停止(几帧无更新)→ 清空
                 for (int i = 0; i < _p2Prompts.Length; i++) _p2Prompts[i] = null;
             var sb = new System.Text.StringBuilder();
             for (int i = 0; i < _p2Prompts.Length; i++)
@@ -538,9 +538,9 @@ namespace SplitScreen
             LogV("[P2HUD] created P2 crosshair");
         }
 
-        
-        
-        
+        // P2 准心图标随【瞄准目标】切换(对齐原版 Pickup.Update→CanvasHelper.SetAimSprite，按目标而非手持工具)。
+        //  原版 SetAimSprite 改的是【共享 P1 准心 centerAim】，分屏下不能用(会改 P1)；故反射出 CanvasHelper 的
+        //  各 AimSprite 精灵字段，自己按 P2 相机射线命中的可交互物 tag 选图标设到 P2 准心。
         static readonly System.Collections.Generic.Dictionary<AimSprite, Sprite> _aimSprites = new System.Collections.Generic.Dictionary<AimSprite, Sprite>();
         // 判据直接读字典,不另设标志:Main.ResetUnityStatics(重载时清理)会 Clear() 掉持有
         // Unity 对象的静态集合,却清不到布尔标志 —— 一旦标志停在 true 而字典已空,
@@ -551,7 +551,7 @@ namespace SplitScreen
         {
             if (AimSpritesResolved) return;
             var ch = ComponentManager<CanvasHelper>.Value;
-            if (ch == null) return;   
+            if (ch == null) return;   // CanvasHelper 还没好，下帧再试
             var t = typeof(CanvasHelper);
             const System.Reflection.BindingFlags bf = System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic;
             void Map(AimSprite key, string field) { var s = t.GetField(field, bf)?.GetValue(ch) as Sprite; if (s != null) _aimSprites[key] = s; }
@@ -584,7 +584,7 @@ namespace SplitScreen
             if (_p2CrosshairImg.sprite != spr) _p2CrosshairImg.sprite = spr;
         }
 
-        
+        // P2 相机正前方射线找可交互物(对齐原版 Helper.FindInteractable，但从 P2 相机出发并跳过 P2 自身碰撞体)。
         static RaycastInteractable P2AimedInteractable()
         {
             if (player2 == null || player2.Camera == null) return null;
@@ -597,7 +597,7 @@ namespace SplitScreen
             for (int i = 0; i < hits.Length; i++)
             {
                 var col = hits[i].collider; var tr = hits[i].transform;
-                if (col == null || tr == null || tr.IsChildOf(p2t)) continue;   
+                if (col == null || tr == null || tr.IsChildOf(p2t)) continue;   // 跳过 P2 自身(第三人称相机在身后)
                 var ri = col.GetComponent<RaycastInteractable>();
                 if (ri == null) { var rd = col.GetComponent<RaycastInteractable_Redirect>(); if (rd != null) ri = rd.RaycastInteractable; }
                 if (ri != null) return ri;
@@ -688,7 +688,7 @@ namespace SplitScreen
         {
             var gp = GetP2BoundGamepad();
             if (gp == null) return;
-             
+            // 对齐原版：用手柄 View(切换界面键 = selectButton)切第一/第三人称。
             bool press = gp.selectButton.isPressed;
             if (P2IsDownedOrCarried)
             {
@@ -787,7 +787,7 @@ namespace SplitScreen
             return null;
         }
 
-        
+        // 反射取 Hotbar 的私有布局 GameObject 字段。
         static GameObject LayoutGo(Component comp, string field)
         {
             if (comp == null) return null;
@@ -797,11 +797,11 @@ namespace SplitScreen
 
         internal static void DestroyP2StatHud()
         {
-            DestroyP2Backpack();   
+            DestroyP2Backpack();   // 清理挂在 _p2HudCanvas 下的 P2 背包光标/手持物 + 复位静态引用
             if (_p2MenuCanvas != null) Object.Destroy(_p2MenuCanvas.gameObject);
             _p2MenuCanvas = null;
             _p2Crosshair = null; _p2CrosshairImg = null; _p2PromptText = null;
-            _p2PickupPool = null; _p2PickupContainer = null;   
+            _p2PickupPool = null; _p2PickupContainer = null;   // 随 _p2HudCanvas 一起销毁，复位引用
             for (int i = 0; i < _p2Prompts.Length; i++) _p2Prompts[i] = null;
             if (_p2HudCanvas != null) Object.Destroy(_p2HudCanvas.gameObject);
             if (_p2UiCamera != null) Object.Destroy(_p2UiCamera.gameObject);
@@ -811,11 +811,11 @@ namespace SplitScreen
             _p2HotbarBuilt = false; _p2HotbarGo = null; _p2SlotIcons = null; _p2SlotHighlights = null;
             _p2SlotAmount = null; _p2HotbarSlotRects = null; _p2HotbarSlotBg = null;
             _p2GpLayouts.Clear(); _p2KbLayout = null;
-            
+            // 提示 UI 随 _p2HudCanvas 一起销毁 → 清 static 引用,重进世界时干净重建(否则残留已销毁项致提示不显示)。
             DestroyP2PromptStrip();
             _p2InteractPrompt = null; _p2RemovePrompt = null; _p2BaitPrompt = null;
             _p2SteerPrompt = null; _p2SteerGlyph1 = _p2SteerGlyph2 = null; _p2SteerPlus = _p2SteerText = null; _p2SteerFrame = -1;
-            _p2SleepOverlay = null;   
+            _p2SleepOverlay = null;   // 睡眠黑屏遮罩随 _p2HudCanvas 一起销毁 → 清引用,重建时干净重生成
             ResetP2Binoc();           
         }
 
@@ -824,7 +824,7 @@ namespace SplitScreen
             int uiLayer = LayerMask.NameToLayer("UI");
             var p2 = player2;
 
-            
+            // 右半屏专用 UI 相机（镜像 _p1UiCamera：clearFlags=Depth，只渲染 UI 层，rect=右半屏）。
             _p2UiCamera = new GameObject("P2_UICamera").AddComponent<Camera>();
             _p2UiCamera.clearFlags    = CameraClearFlags.Depth;
             _p2UiCamera.cullingMask   = uiLayer >= 0 ? (1 << uiLayer) : 0;
@@ -833,7 +833,7 @@ namespace SplitScreen
             _p2UiCamera.nearClipPlane = 0.1f;
             _p2UiCamera.farClipPlane  = 20f;
 
-            
+            // 画布：ScreenSpaceCamera 绑右半屏相机 + 与 P1 相同的 CanvasScaler(match=0)。
             _p2HudCanvas = new GameObject("P2_StatHUD").AddComponent<Canvas>();
             _p2HudCanvas.renderMode    = RenderMode.ScreenSpaceCamera;
             _p2HudCanvas.worldCamera   = _p2UiCamera;
@@ -846,10 +846,10 @@ namespace SplitScreen
             myScaler.uiScaleMode = CanvasScaler.ScaleMode.ScaleWithScreenSize;
             myScaler.referenceResolution    = srcScaler != null ? srcScaler.referenceResolution : new Vector2(1920f, 1080f);
             myScaler.screenMatchMode        = CanvasScaler.ScreenMatchMode.MatchWidthOrHeight;
-            myScaler.matchWidthOrHeight     = 0f; 
+            myScaler.matchWidthOrHeight     = 0f; // 同 P1：按宽度
             if (srcScaler != null) myScaler.referencePixelsPerUnit = srcScaler.referencePixelsPerUnit;
 
-            
+            // 克隆原版 "Stat sliders" 面板（保留原锚点 → 由相机 rect 落在右半屏左下）。
             if (ch != null && ch.healthSlider != null)
             {
                 var panel = ch.healthSlider.transform.parent;
@@ -867,7 +867,7 @@ namespace SplitScreen
                     }
                 }
 
-                
+                // 克隆原版氧气径向表（fatigueParent），独立材质实例。
                 if (ch.fatigueParent != null)
                 {
                     string radialName = ch.fatigueRadial != null ? ch.fatigueRadial.name : null;
@@ -887,7 +887,7 @@ namespace SplitScreen
                 }
             }
 
-            
+            // 整棵 HUD 设到 UI 层，供 P2_UICamera(只渲染 UI 层)渲染。
             if (uiLayer >= 0) SetLayerRecursively(_p2HudCanvas.transform, uiLayer);
 
             LogV($"[P2HUD] created P2 HUD hp={_p2HpSlider!=null} hunger={_p2HungerSlider!=null} thirst={_p2ThirstSlider!=null} oxygen={_p2OxyRadial!=null}");

@@ -57,10 +57,10 @@ namespace SplitScreen
 
             __state = new State { Scope = P2OriginalScope.Tool(), Np = np };
 
-            
-            
-            
-            
+            // 原版 PaddlePaddle 用 np.transform.forward(根朝向)作施力/水花方向；真实本地玩家的身体根会跟随相机 yaw，
+            //  但 P2 的根只停在 rootYaw(不随视角转)——视角 yaw 在 playerPivot(FP)/环绕镜头(TP)上，故根前向永远是错的固定方向。
+            //  统一修复：临时把根 yaw 对齐到【P2 相机水平朝向】(FP/TP 都是 P2 实际看的方向)，让原版按"P2 看的方向"施力；
+            //  OnPaddle 同步返回后立即还原(动画事件期、渲染前还原，模型不会抖)。
             var cam = np.Camera;
             if (cam != null)
             {
@@ -99,7 +99,7 @@ namespace SplitScreen
 
         static bool Prefix(SteeringWheel __instance)
         {
-            if (!Main.isProcessingP2Ray) return true;   
+            if (!Main.isProcessingP2Ray) return true;   // P1 → 原版
 
             var gp = Main.GetP2BoundGamepad();
             if (gp != null)

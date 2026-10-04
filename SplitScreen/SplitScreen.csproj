@@ -201,7 +201,6 @@
     <Compile Include="Patches\Patches.StorageFix.cs" />
     <Compile Include="Patches\Patches.MainMenuCharacter.cs" />
     <Compile Include="Patches\Patches.ResourceRegen.cs" />
-    <Compile Include="Patches\Patches.P1RaycastDiagnostics.cs" />
     <Compile Include="Patches\Patches.RadioCoroutineDiag.cs" />
     <Compile Include="Properties\AssemblyInfo.cs" />
   </ItemGroup>

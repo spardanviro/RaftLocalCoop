@@ -40,9 +40,9 @@ namespace SplitScreen
         }
     }
 
-    
-    
-    
+    // ══════════════════════════════════════════════════════════════════════
+    //  Patch 6: ThirdPerson.Start — 重绑输入 + 强制 P2 进入第三人称
+    // ══════════════════════════════════════════════════════════════════════
     [HarmonyPatch(typeof(ThirdPerson), "Start")]
     static class Patch_ThirdPerson_Start
     {
@@ -99,9 +99,9 @@ namespace SplitScreen
         }
     }
 
-    
-    
-    
+    // ══════════════════════════════════════════════════════════════════════
+    //  Patch 8: ThirdPerson.SetThirdPersonState — 锁定 P2 始终第三人称
+    // ══════════════════════════════════════════════════════════════════════
     [HarmonyPatch(typeof(ThirdPerson), "SetThirdPersonState")]
     static class Patch_ThirdPerson_SetThirdPersonState
     {
@@ -145,15 +145,15 @@ namespace SplitScreen
             }
             if (np != Main.player1) return;
 
-            
-            
-            
+            // 不再使用"切换冷却 + 全身搬到 P1_HAND"的旧逻辑：它会让切换瞬间 P1.HandCamera
+            //  从头内部渲染整具身体（1P 看到眼睛嘴巴），并让 P2 视野里身体闪一下消失。
+            //  层状态由 EnforceMeshStates 每帧设置；相机俯仰由 EnforceP1CameraPitch 每帧覆盖。
         }
     }
 
-    
-    
-    
+    // ══════════════════════════════════════════════════════════════════════
+    //  Patch 7: ThirdPerson.HandleThirdPerson — P2 始终走 action 分支
+    // ══════════════════════════════════════════════════════════════════════
     [HarmonyPatch(typeof(ThirdPerson), "HandleThirdPerson")]
     static class Patch_ThirdPerson_HandleThirdPerson
     {
@@ -200,6 +200,9 @@ namespace SplitScreen
         // 把 crouching 恒判为 true、把 crouchHeightOffset 换成平滑值(站直时=0),
         // 于是原版那行减法照跑,只是减的量连续变化 —— 不新增逻辑,只把阶跃改成连续。
         static IEnumerable<CodeInstruction> Transpiler(IEnumerable<CodeInstruction> instructions)
+            => TranspilerGuard.Verify(instructions, TranspilerCore);
+
+        static IEnumerable<CodeInstruction> TranspilerCore(IEnumerable<CodeInstruction> instructions)
         {
             var fCrouching = AccessTools.Field(typeof(PersonController), "crouching");
             var fOffset = AccessTools.Field(typeof(ThirdPerson), "crouchHeightOffset");

@@ -155,6 +155,9 @@ namespace SplitScreen
         // 后面几次(isKinematic / HandleDrivingUpdate 分叉 / 音效)要保持原样——正是靠它们
         // 在 scope 内认出 P2 是本地驾驶者。
         static IEnumerable<CodeInstruction> Transpiler(IEnumerable<CodeInstruction> instructions)
+            => TranspilerGuard.Verify(instructions, TranspilerCore);
+
+        static IEnumerable<CodeInstruction> TranspilerCore(IEnumerable<CodeInstruction> instructions)
         {
             var getLocal = AccessTools.PropertyGetter(typeof(Network_Player), "IsLocalPlayer");
             var repl = AccessTools.Method(typeof(P2SnowmobileDrive), "IsVanillaLeaveOwner");
@@ -185,6 +188,9 @@ namespace SplitScreen
     static class Patch_Snowmobile_HandleDrivingUpdate_P2Input
     {
         static IEnumerable<CodeInstruction> Transpiler(IEnumerable<CodeInstruction> instructions)
+            => TranspilerGuard.Verify(instructions, TranspilerCore);
+
+        static IEnumerable<CodeInstruction> TranspilerCore(IEnumerable<CodeInstruction> instructions)
         {
             var getGamepad = AccessTools.PropertyGetter(typeof(CustomInputConfig), "Gamepad");
             var gamepadRepl = AccessTools.Method(typeof(P2SnowmobileDrive), "UseGamepadPath");

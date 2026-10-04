@@ -1,7 +1,7 @@
 using System.Collections.Generic;
 using System.Reflection;
 using UnityEngine;
-using UnityEngine.InputSystem;   
+using UnityEngine.InputSystem;   // GetBindingDisplayString 扩展方法 + PlayerInput
 
 namespace SplitScreen
 {
@@ -30,7 +30,7 @@ namespace SplitScreen
             typeof(Pickup).GetField("playerNetwork", BindingFlags.Instance | BindingFlags.NonPublic);
         static readonly FieldInfo s_incapacitatedPlayerField =
             typeof(RessurectComponent).GetField("incapacitatedPlayerAtCursor", BindingFlags.Instance | BindingFlags.NonPublic);
-        
+        // Network_Player.isLocalPlayer 走 VanillaAccessors(高频跨文件,集中收口)。
 
         readonly List<IRaycastable> _p2Raycastables = new List<IRaycastable>();
 
@@ -46,22 +46,22 @@ namespace SplitScreen
             if (!_rt.P2Active) return true;
 
             var np = s_playerNetworkField?.GetValue(instance) as Network_Player;
-            if (np != _rt.P2.Player) return true; 
+            if (np != _rt.P2.Player) return true; // 不是 P2 的 Pickup，放行
 
-            Main.IsP2Steering = false;   
-            Main.IsP2HoveringPickup = false;   
+            Main.IsP2Steering = false;   // 每帧默认非转向;仅在下方对准方向盘且按住 D-pad 右时置真(冻结右摇杆看视角)
+            Main.IsP2HoveringPickup = false;   // 每帧默认未悬停拾取物;仅在下方命中可拾取物时置真(供 P2 工具瞄准 abort 判定)
 
-            
+            // ── 以下完整替换 P2 的 Pickup.Update ──────────────────────
             if (_rt.P2.Player.Camera == null) return false;
 
             if (Main.P2ConsumedInteractThisFrame)
             { ClearRaycastables(); _rt.UI.HidePrompt(); return false; }
 
-            
+            // P2 睡觉中：由 Main.TickP2Bed 独占「X 站起」提示,这里不射线、不碰提示(否则每帧 HidePrompt 抢掉)。
             if (_rt.P2.Player.BedComponent != null && _rt.P2.Player.BedComponent.Sleeping)
             { ClearRaycastables(); return false; }
 
-            
+            // P2 坐着(椅子)中：由 Main.TickP2Seat 独占「X 起身」提示,这里不射线、不碰提示(同床)。
             if (Main.P2IsSeated)
             { ClearRaycastables(); return false; }
 
@@ -73,7 +73,7 @@ namespace SplitScreen
             if (Main.P2IsCarrying)
             { ClearRaycastables(); return false; }
 
-            
+            // P2 滑索中：禁用与物品/设备的交互(否则能和滑索杆等交互);脱离按键由骑乘 Update 处理。
             if (P2ZiplineDriver.IsAttached)
             { ClearRaycastables(); _rt.UI.HidePrompt(); return false; }
 
@@ -86,7 +86,7 @@ namespace SplitScreen
                 return false;
             }
 
-            
+            // P2 自有 UI 打开时(背包/箱子/建造菜单/设备菜单)：不再对世界射线检测/显示交互提示。
             if (Main.IsP2BackpackOpen || Main.IsP2BuildMenuOpen || Main.IsP2MenuOpen)
             {
                 ClearRaycastables();
@@ -100,8 +100,8 @@ namespace SplitScreen
                 return false;
             }
 
-            
-            
+            // 用与建造/工具一致的【已验证】相机与图层：CameraTransform(=瞄准方向) + 预定义 MASK_RaycastInteractable。
+            // (之前用 Camera.transform + 1<<NameToLayer("RaycastInteractable")，后者名字解析不到→-1→1<<-1=图层31→永远打空。)
             Transform camT    = _rt.P2.Player.CameraTransform != null ? _rt.P2.Player.CameraTransform : _rt.P2.Player.Camera.transform;
             int layerMask     = LayerMasks.MASK_RaycastInteractable;
             // Player.UseDistance 是全局静态,由"最后切换视角的那个玩家"写(vanilla SetThirdPersonState:
@@ -121,8 +121,8 @@ namespace SplitScreen
                          ?? hitInfo.collider.GetComponentInParent<RaycastInteractable>();
                 if (ri == null)
                 {
-                    
-                    
+                    // 动物等用 RaycastInteractable_Redirect(碰撞体指向别处的 RaycastInteractable);
+                    //  vanilla Helper.FindInteractable 处理了它,P2 之前没处理 → 打不到动物(搬运失效)。
                     var redir = hitInfo.collider.GetComponent<RaycastInteractable_Redirect>()
                                 ?? hitInfo.collider.GetComponentInParent<RaycastInteractable_Redirect>();
                     if (redir != null) ri = redir.RaycastInteractable;
@@ -189,7 +189,7 @@ namespace SplitScreen
                     }
                     else if (p2Wheel != null)
                     {
-
+                        // ── 方向盘:不跑 vanilla OnIsRayed(它读 P1 手柄/锁 P1 视角),由 HandleP2Steering 用 P2 输入驱动 ──
                         UpdateRaycastables(null);
                         HandleP2Steering(p2Wheel);
                     }
@@ -200,9 +200,9 @@ namespace SplitScreen
                     }
                     else if (p2Net != null)
                     {
-                        
-                        
-                        
+                        // ── 收集网:ItemNet 本身是 PickupItem → 通用拾取分支会对空网误显"按X捡到物品"。
+                        //  vanilla 用 pickupItemType != ItemNet 排除通用提示,改由 ItemNet.OnIsRayed 仅在 Count>0 时提示。
+                        //  这里同理:不跑 vanilla OnIsRayed(它读 P1 距离/写 P1 画布),由 HandleP2ItemNet 仅在有物品时提示+收集。
                         UpdateRaycastables(null);
                         HandleP2ItemNet(p2Net, instance);
                     }
@@ -218,13 +218,13 @@ namespace SplitScreen
                     }
                     else if (p2Storage != null)
                     {
-                        
-                        
-                        
-                        
-                        
-                        
-                        
+                        // ── Storage 路径：直接走 UiRouter ────────────────
+                        //  仅当箱子【未被占用】才提示+打开;已被打开(P1 或他人,storage.IsOpen=true)→ 不提示、不操作。
+                        //  (P2 自己的箱子打开时 IsP2BackpackOpen=true → 上面 line76 已 return,到不了这里;故 IsOpen 必是别人开的,
+                        //   绝不能替别人关箱。P2 关自己的箱走 TickMenu 的 B。)
+                        //  【不跑 vanilla Storage.OnIsRayed】(同座椅):它在 P1 上下文读 P1 键盘 Interact +
+                        //   写 P1 的 DTM 提示 → P1 按交互键(如搬动物)时会被它吃掉去开/闪 P2 看的箱子 + 置全局 IsBusy
+                        //   → P1 搬运被卡。P2 开箱由下方 _rt.UI.OpenStorage(用 P2 自己的 StorageManager)独立完成,不需 OnIsRayed。
                         UpdateRaycastables(null);
                         if (_rt.P2.CurrentStorage != p2Storage)
                         {
@@ -263,16 +263,16 @@ namespace SplitScreen
                     }
                     else
                     {
-                        
-                        
-                        
-                        
-                        
-                        
+                        // ── 非 Storage 设备：完整 P2 上下文跑 OnIsRayed ──────────────
+                        //  许多设备(电池座/研究台…)在 Start 缓存 localPlayer=ComponentManager<Network_Player>.Value(=P1)，
+                        //  并读 localPlayer.Inventory.GetSelectedHotbarSlot() 判断手持物。P2 手持物在自定义 _p2Hotbar，
+                        //  共享热栏选中槽是 P1 的 → 设备看不到 P2 手持物(电池/水瓶)，无提示、装不上。
+                        //  故这里临时：①设备缓存的 localPlayer 字段 → P2；②把 P2 手持物注入共享选中热栏槽(用完同步回扣减)；
+                        //  ③强制 P2 本地玩家；④换入 P2 背包(供 take/add 落到 P2)。结束全部还原。
                         RunDeviceRayAsP2(ri);
                     }
 
-                    
+                    // ── 捡起逻辑（仅非箱子；箱子的提示已在上面 Storage 路径处理，勿在此 HidePrompt 覆盖）─────
                     var pickupItem       = ri.transform.GetComponent<PickupItem>();
                     var pickupChanneling = ri.transform.GetComponent<PickupChanneling>();
                     var p2HarvestPlant = (p2Storage == null && p2Research == null && p2Wheel == null && p2Sail == null && p2Net == null && p2Seat == null && p2Carry == null && p2Wardrobe == null && p2Trading == null) ? hitInfo.collider.GetComponentInParent<Plant>() : null;
@@ -285,7 +285,7 @@ namespace SplitScreen
 
                     if (canPickup || hasYield || canHarvest)
                     {
-                        Main.IsP2HoveringPickup = true;   
+                        Main.IsP2HoveringPickup = true;   // P2 准心悬停可拾取物 → P2 工具瞄准应让位(对齐 vanilla abortOnItemHover)
                         string term;
                         if (canHarvest) term = Helper.GetTerm("Game/Harvest");
                         else
@@ -297,8 +297,8 @@ namespace SplitScreen
                     }
                     else if (p2Storage == null && p2Research == null && p2Wheel == null && p2Sail == null && p2Net == null && p2Seat == null && p2Carry == null && p2Wardrobe == null && p2Container == null && p2Trading == null && !Main.IsP2DevicePromptThisFrame)
                     {
-                        
-                        
+                        // 设备(烹饪/熔炉…)在 OnIsRayed 里通过 DTM 写了交互提示 → 已被捕获到 P2 半屏，勿清。
+                        //  椅子(p2Seat)排除:HandleP2Seat 已设「X 坐下」提示,勿在此清掉(否则瞄椅子无提示)。
                         _rt.UI.HidePrompt();
                     }
 
@@ -403,7 +403,7 @@ namespace SplitScreen
             return ri.GetComponentInParent<MeshPathBase>();
         }
 
-        
+        // 同上:在 IRaycastable 列表里找方向盘(SteeringWheel 实现 IRaycastable)。
         static SteeringWheel FindSteeringWheel(RaycastInteractable ri)
         {
             var objs = ri.RaycastableObjects;
@@ -458,7 +458,7 @@ namespace SplitScreen
             return ri.GetComponentInParent<PlayerSeat>();
         }
 
-        
+        // 同上:在 IRaycastable 列表里找动物搬运组件(Carry/Domestic_Carry 实现 IRaycastable)。
         static Carry FindCarry(RaycastInteractable ri)
         {
             var objs = ri.RaycastableObjects;
@@ -521,7 +521,7 @@ namespace SplitScreen
 
         void HandleP2Seat(PlayerSeat seat)
         {
-            if (!Main.SeatHasFree(seat)) { _rt.UI.HidePrompt(); return; }   
+            if (!Main.SeatHasFree(seat)) { _rt.UI.HidePrompt(); return; }   // 满座:不提示
             _rt.UI.ShowPrompt("Interact", Helper.GetTerm("Game/Use"));
             if (_rt.P2.ActionInteract?.WasPressedThisFrame() == true)
             {
@@ -530,16 +530,16 @@ namespace SplitScreen
             }
         }
 
-        
-        
-        
-        
+        // ── P2 方向盘:按住 D-pad 右 + 右摇杆左右 → 转向(复用 vanilla 私有 Rotate,含 clamp±80 + host RPC) ──
+        //  不跑 vanilla OnIsRayed(它用 GetPlayerByIndex(0)=P1 手柄并 SetLockMouseLook 锁 P1 视角)。
+        //  转速对齐 vanilla:其手柄 GetXAxis(Look,"Mouse X") 即 rightStick.x,这里读 p2ActionLook.x 等价。
+        //  视角冻结:置 Main.IsP2Steering=true,FP(TickP2View)/TP(HandleThirdPerson) 据此停止右摇杆看视角累加。
         static readonly MethodInfo s_wheelRotate =
             typeof(SteeringWheel).GetMethod("Rotate", BindingFlags.Instance | BindingFlags.NonPublic);
 
         void HandleP2Steering(SteeringWheel wheel)
         {
-
+            // 提示:准心上方双字形([D-pad右][右摇杆]) + "长按来轻轻旋转",复刻 vanilla。
             _rt.UI.HidePrompt();
             Main.SetP2SteerPrompt("Rotate", "RotateAxis", Helper.GetTerm("Game/RotateSmooth2"));
 
@@ -595,14 +595,14 @@ namespace SplitScreen
             }
         }
 
-        
-        
-        
-        
+        // ── P2 收集网:仅在网内有物品时提示+收集(对齐 vanilla;空网不提示) ──
+        //  收集走 vanilla Pickup.PickupItemByType→PickupItemNet→AddCollectedItemsToPlayer。其内部
+        //  RemovePickupItem 有 IsLocalPlayer 门控(P2=false),故沿用普通拾取的 forcedLocal+SwapInP2 路由,
+        //  使物品真正落到 P2 背包。PickupItemNet 自身已 guard Count>0,但提示文案/显隐这里据 Count 控制。
         void HandleP2ItemNet(ItemNet net, Pickup instance)
         {
             int count = (net != null && net.itemCollector != null) ? net.itemCollector.collectedItems.Count : 0;
-            if (count <= 0) { _rt.UI.HidePrompt(); return; }   
+            if (count <= 0) { _rt.UI.HidePrompt(); return; }   // 空网:不提示(对齐 vanilla)
 
             LocalizationParameters.itemCount = count;
             _rt.UI.ShowPrompt("Interact", Helper.GetTerm("Game/CollectItemCount", applyParameters: true));   
@@ -623,15 +623,15 @@ namespace SplitScreen
             return _rotateGlyphKey ?? (_rotateGlyphKey = "Rotate");
         }
 
-        
+        // ── IRaycastable 通知（维护帧间 enter / exit） ────────────────────
         void UpdateRaycastables(List<IRaycastable> newList)
         {
-            
+            // 离开旧列表中不再命中的对象
             foreach (var prev in _p2Raycastables)
                 if (prev != null && (newList == null || !newList.Contains(prev)))
                     prev.OnRayExit();
 
-            
+            // 进入 / 持续命中新列表
             if (newList != null)
                 foreach (var item in newList)
                 {

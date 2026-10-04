@@ -8,25 +8,25 @@ namespace SplitScreen
 {
     public static partial class Main
     {
-        
-        
-        
+        // ══════════════════════════════════════════════════════════════════
+        //  P2 研究台 —— 与混合背包一脉相承：把【真背包(P2内容)】+【真研究面板
+        //  (Inventory_ResearchTable 单例)】一起搬到 P2 右半屏，自建光标驱动。
         //
-        
-        
-        
-        
-        
-        
-        
-        
-        
-        
-        
+        //  原版 ResearchTable.Open(asLocalPlayer:true) 会 OpenMenuCloseOther(Inventory)
+        //  + inventoryReference.Show() → 整套界面落在【P1 共享画布】且用【P1 背包】。
+        //  故对 P2 不走 vanilla Open(在 InteractionRouter 里被 ResearchTable 专属分支拦截)，
+        //  改由本文件自建：
+        //    打开：OpenP2Backpack(openCrafting:false)(真背包搬到P2半屏=P2内容 + 光标) →
+        //          研究面板 reparent 到 P2 半屏(背包左侧) + 激活研究输入槽。
+        //    操作：光标命中真研究槽(也是真 Slot → 复用 ClickHoveredSlot 放料/取料)；
+        //          右摇杆滚动配方列表、磁吸命中配方行；
+        //          X = 研究研究槽里的物品(消耗 1 个 P2 材料)；
+        //          A 命中"进度满"的配方行 = 学习(LearnButton)。
+        //    关闭：B(UiRouter.TickMenu) → 研究槽剩料搬回 P2 背包 → 还原研究面板 → 连背包一起关。
         //
-        
-        
-        
+        //  说明：研究/学习均为本机 host 直跑(P1=host，配方 Learned 全局共享)；研究消耗的
+        //   是研究槽里的物品(来自 P2 背包) → 即消耗 P2 材料。
+        // ══════════════════════════════════════════════════════════════════
         static ResearchTable           _p2ResearchTable;
         static Inventory_ResearchTable _p2ResearchInv;
         static Inventory_ResearchTable _p2ResearchCloneInv;
@@ -45,12 +45,12 @@ namespace SplitScreen
 
         static Inventory_ResearchTable VanillaResearchInv => ComponentManager<Inventory_ResearchTable>.Value;
 
-        
+        // 研究槽右侧的「RT 研究」提示
         static RectTransform _p2ResearchPrompt;
         static Image         _p2ResearchPromptGlyph;
         static Text          _p2ResearchPromptText;
 
-        
+        // ResearchMenuItem.itemImage(图标 Image，私有) → 反射取其 rect 做吸附中心(对齐图标正中)
         static FieldInfo s_riItemImage;
 
         
@@ -61,12 +61,25 @@ namespace SplitScreen
             return inventory != null && ReferenceEquals(inventory, _p2ResearchCloneInv);
         }
 
-        
-        
+        // 研究槽命中/吸附用【槽根 rect】(rect.center 与 pivot 无关，恒为几何中心)。
+        //  注意：不能用 imageComponent，空槽时其图标 Image 会塌缩到槽左下角 → 吸附跑偏。
         static RectTransform ResearchSlotRect()
         {
             if (_p2ResearchSlot == null) return null;
             return _p2ResearchSlot.rectTransform != null ? _p2ResearchSlot.rectTransform : _p2ResearchSlot.transform as RectTransform;
+        }
+
+        static readonly System.Reflection.FieldInfo s_researchOccupant =
+            typeof(ResearchTable).GetField("occupyingPlayerID",
+                System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
+
+        // 让原版把这台研究台视为"被占用",P1 就不能同时打开(原版开/关会 SetActive 那个
+        // 此刻挂在 P2 克隆面板下的 slot)。用独立的 Network_UserId 实例:原版 Close 会对它 Clear()。
+        static void SetResearchOccupant(ResearchTable table, bool occupied)
+        {
+            if (table == null || s_researchOccupant == null) return;
+            try { s_researchOccupant.SetValue(table, new Network_UserId(occupied ? 999UL : 0UL)); }
+            catch (System.Exception e) { LogV("[P2Research] 设置占用标记失败: " + e.Message); }
         }
 
         internal static void OpenP2ResearchTable(ResearchTable table)
@@ -85,6 +98,7 @@ namespace SplitScreen
             if (clone == null) { ModEntry.Logger.Log("[P2Research] 克隆研究面板失败,仅开背包"); return; }
 
             _p2ResearchTable    = table;
+            SetResearchOccupant(table, true);
             _p2ResearchCloneInv = clone;
             _p2ResearchInv      = clone;
             _p2ResearchSlot     = table.Slot;
@@ -241,6 +255,7 @@ namespace SplitScreen
         internal static void CloseP2ResearchTable()
         {
             if (_p2ResearchTable == null) return;
+            SetResearchOccupant(_p2ResearchTable, false);
             SetResearchAnimatorOpen(_p2ResearchTable, false);
 
             if (_p2ResearchSlot != null)
@@ -265,8 +280,8 @@ namespace SplitScreen
             LogV("[P2Research] 关闭研究台");
         }
 
-        
-        
+        // 驱动 ResearchTable 私有 animator 的 "Open" bool —— 书本翻开/合上动画，翻书音效是该动画的动画事件。
+        //  vanilla Open()/Close() 即靠它，P2 自建路径绕过了 Open()，故手动补上(动画/音效在 host=P1 本机播放)。
         static void SetResearchAnimatorOpen(ResearchTable table, bool open)
         {
             if (table == null) return;
@@ -280,7 +295,7 @@ namespace SplitScreen
             catch (Exception e) { ModEntry.Logger.Log("[P2Research] animator ex: " + e.Message); }
         }
 
-        
+        // ResearchMenuItem.itemImage(图标)的 rect → 吸附中心对齐图标正中(行 rect 中心会偏到图标左侧)。
         static RectTransform ResearchItemIconRect(ResearchMenuItem mi)
         {
             if (mi == null) return null;
@@ -290,7 +305,7 @@ namespace SplitScreen
             return img != null ? img.rectTransform : mi.transform as RectTransform;
         }
 
-        
+        // 每帧(研究模式)：RT 研究 + 槽提示 + (光标在面板内时)右摇杆滚动 + 磁吸命中配方行。由 TickP2Backpack 调用。
         static void TickP2Research(Gamepad gp, Vector2 cursorScreen)
         {
             _p2HoverResearch = null;
@@ -301,13 +316,13 @@ namespace SplitScreen
             if (gp.rightTrigger.wasPressedThisFrame) P2ResearchTryResearch();
 
             var pr = _p2InvCursor.parent as RectTransform;
-            
-            
+            // 视口 = ScrollRect.viewport(可见窗口)；用它判断"光标在研究列表区域"比面板根 rect 可靠
+            //  (面板根可能不是可见区域)。退回 content 父级 / 面板根。
             var viewport = (_p2ResearchScroll != null && _p2ResearchScroll.viewport != null) ? _p2ResearchScroll.viewport
                          : (_p2ResearchContent != null ? _p2ResearchContent.parent as RectTransform : _p2ResearchInv.transform as RectTransform);
             bool inPanel = viewport != null && RectTransformUtility.RectangleContainsScreenPoint(viewport, cursorScreen, _p2UiCamera);
 
-            
+            // 滚动：光标在列表视口内时，右摇杆上下滚。按【像素/秒】换算 → 不受列表长度影响、手感接近原版。
             float ry = gp.rightStick.ReadValue().y;
             if (inPanel && Mathf.Abs(ry) > 0.15f)
             {
@@ -323,7 +338,7 @@ namespace SplitScreen
                     _p2ResearchScrollbar.value = Mathf.Clamp01(_p2ResearchScrollbar.value + ry * 0.5f * Time.unscaledDeltaTime);
                 else if (_p2ResearchContent != null && viewport != null)
                 {
-                    
+                    // 直接移动列表容器：ry>0(上推)=回到顶部 → 减小 y(content 顶 pivot 时 y 越大越往下)。
                     float maxScroll = Mathf.Max(0f, _p2ResearchContent.rect.height - viewport.rect.height);
                     float ny = Mathf.Clamp(_p2ResearchContent.anchoredPosition.y - ry * pxPerSec * Time.unscaledDeltaTime, 0f, maxScroll);
                     _p2ResearchContent.anchoredPosition = new Vector2(_p2ResearchContent.anchoredPosition.x, ny);
@@ -341,9 +356,9 @@ namespace SplitScreen
             {
                 if (mi == null || !mi.gameObject.activeInHierarchy) continue;
                 var rt = mi.transform as RectTransform; if (rt == null) continue;
-                var iconRt = ResearchItemIconRect(mi);                              
+                var iconRt = ResearchItemIconRect(mi);                              // 吸附中心 = 图标方框中心
                 Vector2 c = RectTransformUtility.WorldToScreenPoint(_p2UiCamera, iconRt.TransformPoint(iconRt.rect.center));
-                if (RectTransformUtility.RectangleContainsScreenPoint(rt, cursorScreen, _p2UiCamera))   
+                if (RectTransformUtility.RectangleContainsScreenPoint(rt, cursorScreen, _p2UiCamera))   // 命中判定仍用整行(更宽容)
                 { hit = mi; bestCenter = c; bestDiff = c - cursorScreen; break; }
                 float d = (c - cursorScreen).sqrMagnitude;
                 if (d < bestSq) { bestSq = d; nearest = mi; bestCenter = c; bestDiff = c - cursorScreen; }
@@ -351,23 +366,23 @@ namespace SplitScreen
             var chosen = hit ?? nearest;
             if (chosen == null) return;
 
-            
-            
-            
+            // 研究槽优先：研究槽紧挨第一条配方行，光标靠近研究槽时该行也在半径内 → 若不让位，
+            //  _p2HoverResearch 会被设上、格子吸附被跳过 → 研究槽磁吸永不触发(光标吸不到槽中心)。
+            //  故：光标在研究槽内、或离研究槽中心比离最近配方行更近 → 放弃配方行命中，交给格子吸附吸到研究槽。
             var srt = ResearchSlotRect();
             if (srt != null && srt.gameObject.activeInHierarchy)
             {
                 Vector2 sc = RectTransformUtility.WorldToScreenPoint(_p2UiCamera, srt.TransformPoint(srt.rect.center));
                 if (RectTransformUtility.RectangleContainsScreenPoint(srt, cursorScreen, _p2UiCamera)
                     || (sc - cursorScreen).sqrMagnitude <= bestDiff.sqrMagnitude)
-                    return;   
+                    return;   // 让位 → _p2HoverResearch 保持 null → TickP2GridMagnet 吸到研究槽
             }
 
             _p2HoverResearch = chosen;
 
             Vector2 stick = gp.leftStick.ReadValue();
             float escape = P2MagnetEscape * scale;
-            if (bestDiff.sqrMagnitude >= (stick * escape).sqrMagnitude)   
+            if (bestDiff.sqrMagnitude >= (stick * escape).sqrMagnitude)   // 摇杆不足以挣脱 → 吸附
             {
                 float thr = P2MagnetCenterThr * scale;
                 Vector2 target = (bestDiff.sqrMagnitude > thr * thr)
@@ -378,7 +393,7 @@ namespace SplitScreen
             }
         }
 
-        
+        // A：光标命中研究配方行 → 进度满则学习。返回 true 表示已处理(吃掉A，不当背包点击)。
         static bool P2ResearchTryLearnHovered()
         {
             if (_p2ResearchTable == null || _p2HoverResearch == null) return false;
@@ -399,7 +414,7 @@ namespace SplitScreen
             return true;
         }
 
-        
+        // RT：研究研究槽里的物品(消耗 1 个 P2 材料)。
         static void P2ResearchTryResearch()
         {
             if (_p2ResearchTable == null || _p2ResearchSlot == null) return;
@@ -420,7 +435,7 @@ namespace SplitScreen
             catch (Exception e) { ModEntry.Logger.Log("[P2Research] research ex: " + e.Message); }
         }
 
-        
+        // 研究槽右侧的「RT 研究」提示：仅当槽内物品【未研究且可研究】时显示，跟随研究槽右侧。
         static void UpdateResearchPrompt()
         {
             EnsureResearchPrompt();
@@ -442,8 +457,8 @@ namespace SplitScreen
                 Vector2 sc = RectTransformUtility.WorldToScreenPoint(_p2UiCamera, srt.TransformPoint(srt.rect.center));
                 if (RectTransformUtility.ScreenPointToLocalPointInRectangle(pr, sc, _p2UiCamera, out var local))
                 {
-                    
-                    float halfW = srt.rect.width * 0.5f;   
+                    // 左 pivot：anchoredPosition.x = 提示左边缘。= 研究槽中心 + 半个槽宽 + 小间距 → RT 字形左侧紧挨研究槽。
+                    float halfW = srt.rect.width * 0.5f;   // 槽在 scale=1 的面板内 → 局部宽≈画布局部宽
                     _p2ResearchPrompt.anchoredPosition = local + new Vector2(halfW + 8f, 0f);
                 }
             }
@@ -459,7 +474,7 @@ namespace SplitScreen
             var go = new GameObject("P2_ResearchPrompt", typeof(RectTransform));
             var rt = go.GetComponent<RectTransform>(); rt.SetParent(_p2HudCanvas.transform, false);
             rt.anchorMin = rt.anchorMax = new Vector2(0.5f, 0.5f);
-            rt.pivot = new Vector2(0f, 0.5f);   
+            rt.pivot = new Vector2(0f, 0.5f);   // 左 pivot → anchoredPosition 为提示左边缘，整体落在研究槽右侧不遮挡
             rt.sizeDelta = new Vector2(180f, 48f);
             var h = go.AddComponent<HorizontalLayoutGroup>();
             h.childAlignment = TextAnchor.MiddleLeft; h.spacing = 6f;

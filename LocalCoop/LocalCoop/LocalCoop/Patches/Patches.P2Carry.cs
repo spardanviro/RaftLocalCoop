@@ -4,17 +4,17 @@ using UnityEngine;
 
 namespace SplitScreen
 {
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
+    // ══════════════════════════════════════════════════════════════════════
+    //  P2 搬运/复活队友 —— RessurectComponent。
+    //   原版 Update→CheckForPlayerToCarry/HandleCarrying 门控 IsLocalPlayer：瞄准倒地队友(HitAtCursor
+    //   MASK_RemotePlayer) + "Interact" 抱起；抱着时找床 + "Interact" 放床复活。对 P2 原版直接 return。
+    //   做法：把 P2 的 RessurectComponent.Update 整段包进 P2OriginalScope.Tool()(每帧，scope 随方法返回即释放，
+    //   与 UseItemController.Update 同套路 → 不污染其它系统)：isLocalPlayer 强制真过门控；HitAtCursor 走 P2 相机；
+    //   "Interact"→P2 X；DTM 提示→P2 半屏(IsP2OriginalActive 捕获)。StartCarryingPlayer 会置全局 IsBusy →
+    //   save/restore 防泄漏给 P1(放床/停搬运时它本会复位，这里多一层保险且覆盖中途帧)。
+    //  限制(v1)：抱起点用 firstPersonCarryTransform(scope 内 isLocalPlayer=true)，P2 第三人称下被抱队友位置可能略偏；
+    //   功能(抱起→放床→复活)可用，视觉细节后续再修。
+    // ══════════════════════════════════════════════════════════════════════
     [HarmonyPatch(typeof(RessurectComponent), "Update")]
     static class Patch_RessurectComponent_Update_P2
     {
@@ -51,7 +51,7 @@ namespace SplitScreen
             st.Ctx?.Dispose(); st.Ctx = null;
             st.Busy?.Dispose(); st.Busy = null;
         }
-
+                // 注：设备内部的 ReselectCurrentSlot 已被 Patch_Hotbar_ReselectCurrentSlot_P2 抑制，P1 手持模型不受影响。
     }
 
     [HarmonyPatch(typeof(LocalizationParameters), "GetParameterValue")]

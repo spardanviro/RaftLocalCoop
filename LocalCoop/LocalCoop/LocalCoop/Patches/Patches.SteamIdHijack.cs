@@ -6,20 +6,20 @@ using UnityEngine.Rendering;
 
 namespace SplitScreen
 {
-    
-    
-    
+    // ══════════════════════════════════════════════════════════════════════
+    //  PlayerContext — 玩家操作上下文路由层
+    // ══════════════════════════════════════════════════════════════════════
     public static class PlayerContext
     {
-        
+        /// 当前活跃玩家。null = 使用原始 P1 单例（默认）。
         public static Network_Player Active;
 
         public static void SetP2()  => Active = Main.player2;
         public static void Clear()  => Active = null;
 
-        
-        
-        
+        // 扫描场景找真正的本地玩家：IsLocalPlayer 且 Stats 有效。
+        //  P2 克隆在 OnPlayerCreated.Postfix 已被 isLocalPlayer=false，因此只会命中真正的 P1。
+        //  仅在存档兜底路径调用（开销可接受），不要放进每帧热路径。
         public static Network_Player ResolveGenuineLocalPlayer()
         {
             foreach (var np in UnityEngine.Object.FindObjectsOfType<Network_Player>())
@@ -32,9 +32,9 @@ namespace SplitScreen
             return null;
         }
 
-        
-        
-        
+        // 严格版:额外要求 StorageManager 有效 —— 用于把陈旧的 Main.player1 重捕获回【完整的】真·P1,
+        //  排除 host 自连接残留的不完整玩家对象(如 "Inventory_Player":IsLocalPlayer 但无 StorageManager,
+        //  曾被设进 ComponentManager<Network_Player> backing 造成漂移)。
         public static Network_Player ResolveGenuineLocalPlayerStrict()
         {
             foreach (var np in UnityEngine.Object.FindObjectsOfType<Network_Player>())
@@ -57,17 +57,17 @@ namespace SplitScreen
         }
     }
 
-    
-    
-    
+    // ══════════════════════════════════════════════════════════════════════
+    //  Patch 1: OnPlayerCreated — steamID 欺骗
+    // ══════════════════════════════════════════════════════════════════════
     [HarmonyPatch(typeof(Network_Player), nameof(Network_Player.OnPlayerCreated))]
     static class Patch_OnPlayerCreated
     {
         static FieldInfo steamIDField;
         static FieldInfo isLocalPlayerField;
 
-        
-        
+        // 用 Harmony __state 在 Prefix/Postfix 间传本次调用的真 SteamId(per-invocation),
+        //  取代跨调用静态字段 —— spawn 中断/异常/调用顺序变化都不会残留旧 id。
         static void Prefix(Network_Player __instance, ref Network_UserId steamID, Raft_Network network, ref Network_UserId __state)
         {
             if (!Main.isSpawningP2) return;
@@ -125,15 +125,15 @@ namespace SplitScreen
         }
     }
 
-    
-    
-    
+    // ══════════════════════════════════════════════════════════════════════
+    //  Patch 1a: InitializeComponents — VolumetricLightRenderer 拦截
+    // ══════════════════════════════════════════════════════════════════════
     [HarmonyPatch(typeof(Network_Player), "InitializeComponents")]
     static class Patch_InitializeComponents
     {
         static void Postfix(Network_Player __instance)
         {
-            
+            // 诊断日志：每次 InitializeComponents 之后都报告关键组件状态
             try
             {
                 var bcField = typeof(Network_Player).GetField("blockCreator",
@@ -154,19 +154,19 @@ namespace SplitScreen
         }
     }
 
-    
-    
-    
-    
+    // ══════════════════════════════════════════════════════════════════════
+    //  Patch 1e: CameraShaker.Awake — 阻止 P2 生成时覆盖 Instance 单例
+    //  （Instance 是字段而非属性，拦截 Awake 可同等阻断赋值）
+    // ══════════════════════════════════════════════════════════════════════
     [HarmonyPatch(typeof(EZCameraShake.CameraShaker), "Awake")]
     static class Patch_CameraShaker_Awake
     {
         static bool Prefix() => !Main.isSpawningP2;
     }
 
-    
-    
-    
+    // ══════════════════════════════════════════════════════════════════════
+    //  Patch 1f: Network_Player.LocalPlayerCameraTransform setter — 拦截
+    // ══════════════════════════════════════════════════════════════════════
     [HarmonyPatch]
     static class Patch_LocalPlayerCamTransform_Set
     {
@@ -175,18 +175,18 @@ namespace SplitScreen
         static bool Prefix() => !Main.isSpawningP2;
     }
 
-    
-    
+    // ══════════════════════════════════════════════════════════════════════
+    //  Patch RestoreUser: 修复 ComponentManager<Network_Player> stale 引用
     //
-    
-    
-    
-    
-    
+    //  问题：玩家重新加入世界时，旧 P1 (P1_old) 被销毁（OnDestroy 将 stats=null），
+    //  但 ComponentManager<Network_Player>.component（静态字段）仍持有 P1_old 的 C# 引用。
+    //  新 P1 (P1_new) 的 InitializeComponents 会调用
+    //  ComponentManager<Network_Player>.Value = this 来覆盖，但时序上可能赶不及
+    //  SaveAndLoad.RestoreUser() 的调用，导致 RestorePlayer 收到 stats=null 的 P1_old。
     //
-    
-    
-    
+    //  修复：Prefix 检测 CM 中的 player 是否已销毁或 Stats 为 null，
+    //  若是则通过 FindObjectsOfType 找到有效的本地玩家并修正 CM。
+    // ══════════════════════════════════════════════════════════════════════
     [HarmonyPatch(typeof(SaveAndLoad), "RestoreUser")]
     static class Patch_SaveAndLoad_RestoreUser
     {
@@ -230,19 +230,19 @@ namespace SplitScreen
         }
     }
 
-    
-    
+    // ══════════════════════════════════════════════════════════════════════
+    //  Patch BCC: BlockCollisionConsolidator.UpdateActiveCollision — 修复 stale localPlayer
     //
-    
-    
-    
+    //  游戏 host 自连接过程中会短暂创建并随即销毁临时 Network_Player。
+    //  若 BlockCollisionConsolidator.localPlayer 此时被赋值为该临时对象，
+    //  随后访问其 transform.position 会产生 native crash（访问已释放对象）。
     //
-    
-    
-    
-    
-    
-    
+    //  修复策略：
+    //  1. 用 Unity == 运算符检查 localPlayer 是否已销毁（native 侧失效）。
+    //  2. 若失效，通过 FindObjectsOfType 找本地玩家（不走 ComponentManager，
+    //     因为 ComponentManager<T> 所有泛型实例共用同一 backing，
+    //     读 Network_Player 可能拿到 PlayerInventory，导致 SetValue 类型异常）。
+    // ══════════════════════════════════════════════════════════════════════
     [HarmonyPatch(typeof(BlockCollisionConsolidator), "UpdateActiveCollision")]
     static class Patch_BlockCollisionConsolidator_LocalCoopActiveCells
     {
@@ -437,12 +437,12 @@ namespace SplitScreen
         }
     }
 
-    
-    
-    
-    
-    
-    
+    // ══════════════════════════════════════════════════════════════════════
+    //  Patch: SaveAndLoad.SaveUser — 强制以真正的本地玩家 P1 存档
+    //   SaveAndLoad.localPlayer 是静态字段，分屏期间可能被缓存成被污染的对象
+    //   （ComponentManager backing 串型 → 实为 PlayerInventory），导致 RGD_Player 构造撞 null、
+    //   保存中断、游戏无法自动退出。这里在 SaveUser 执行前把它强制改回真正的 P1。
+    // ══════════════════════════════════════════════════════════════════════
     [HarmonyPatch(typeof(SaveAndLoad), "SaveUser")]
     static class Patch_SaveAndLoad_SaveUser
     {
@@ -455,7 +455,7 @@ namespace SplitScreen
             if (localPlayerField == null) return;
             var p1 = Main.player1;
             if (p1 == null) return;
-            
+            // 仅当当前缓存值不是有效本地玩家（被污染/缺组件）时才纠正，避免误改正常单人存档。
             var cur = localPlayerField.GetValue(null) as Network_Player;
             bool curBad = (UnityEngine.Object)cur == null || cur.Stats == null || !cur.IsLocalPlayer;
             if (curBad)
@@ -465,7 +465,7 @@ namespace SplitScreen
             }
         }
 
-        
+        // 保存 P1 之后，把 P2 独立存档也写盘。
         static void Postfix()
         {
             if (Main.player2 != null)
@@ -473,15 +473,15 @@ namespace SplitScreen
         }
     }
 
-    
-    
-    
-    
-    
-    
-    
-    
-    
+    // ══════════════════════════════════════════════════════════════════════
+    //  Patch: SaveAndLoad.SaveWorld — 存档世界期间的本地玩家兜底
+    //   SaveWorld → CreateRGDGame → new RGD_NoteBook(noteBook) 读取
+    //   ComponentManager<Network_Player>.Value.NoteBookUI。分屏(尤其退出/重载交错)时
+    //   Main.player1 可能已失效，CM getter 会回退到被污染的原生 backing（实为 PlayerInventory），
+    //   导致 NoteBookUI 字段读出垃圾引用 → `!= null` 在 IsNativeObjectAlive 撞 NRE →
+    //   存档中断 → 点"保存退出"后无法自动退出游戏。
+    //   这里在存档全程置 SavingWorld 标志，让 getter 在兜底路径改为扫描真正的本地玩家。
+    // ══════════════════════════════════════════════════════════════════════
     [HarmonyPatch(typeof(SaveAndLoad), "SaveWorld")]
     static class Patch_SaveAndLoad_SaveWorld
     {
@@ -500,5 +500,5 @@ namespace SplitScreen
             SavingWorld = false;
         }
     }
-
+                // 注：设备内部的 ReselectCurrentSlot 已被 Patch_Hotbar_ReselectCurrentSlot_P2 抑制，P1 手持模型不受影响。
 }

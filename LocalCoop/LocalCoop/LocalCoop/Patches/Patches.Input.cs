@@ -7,9 +7,9 @@ using UnityEngine.InputSystem;
 
 namespace SplitScreen
 {
-    
-    
-    
+    // ══════════════════════════════════════════════════════════════════════
+    //  Patch 5: PersonController.Start — 尝试重绑 P2 移动输入
+    // ══════════════════════════════════════════════════════════════════════
     [HarmonyPatch(typeof(PersonController), "Start")]
     static class Patch_PersonController_Start
     {
@@ -28,20 +28,20 @@ namespace SplitScreen
         }
     }
 
-    
-    
-    
+    // ══════════════════════════════════════════════════════════════════════
+    //  Patch 9: PersonController.Update — P2 走本地玩家输入分支
+    // ══════════════════════════════════════════════════════════════════════
     [HarmonyPatch(typeof(PersonController), "Update")]
     static class Patch_PersonController_Update
     {
         static readonly FieldInfo actionMoveField =
             typeof(PersonController).GetField("actionMove", BindingFlags.Instance | BindingFlags.NonPublic);
 
-        
-        
+        // isLocalPlayer 强制 + ActiveMenu 中和 + PlayerContext/P2Mode 现统一由 P2OriginalScope.Movement() 处理
+        //  (经 __state 存到 Postfix/Finalizer 释放),不再手写 _p2LocalForced/_p2SavedMenu/_p2MenuCleared。
 
-        
-        
+        // P2 菜单打开时把移动输入换成这个【永不启用】的动作 → ReadValue 恒为 0 → P2 站住不动
+        //  (左摇杆此时用于鱼饵菜单等的导航)。菜单关闭再换回 p2ActionMove。
         static readonly InputAction _p2NullMove =
             new InputAction("P2NullMove", InputActionType.Value, expectedControlType: "Vector2");
 
@@ -52,7 +52,7 @@ namespace SplitScreen
             var np = __instance.GetComponent<Network_Player>();
             if (np != Main.player2) return true;
 
-            
+            // 菜单打开 → 用空动作冻结移动；否则用 P2 左摇杆。
             var wantMove = Main.IsP2MenuOpen ? _p2NullMove : Main.p2ActionMove;
             if (wantMove != null && actionMoveField != null)
             {
@@ -65,14 +65,14 @@ namespace SplitScreen
                 }
             }
 
-            
-            
-            
-            
-            
+            // ── 统一代理层：P2OriginalScope.Movement() ──────────────────────────
+            //  scope 内:强制 isLocalPlayer=true(绕 Mono 对 IsLocalPlayer getter 的内联,让 P2 走本地移动分支,
+            //  否则完全无法移动/动画不播/脚陷木筏)、中和全局 ActiveMenu(P1 开背包置 Inventory 会冻结 P2 的
+            //  `ActiveMenu==None` 奔跑门控)、PlayerContext.Active=P2 + P2Mode=Movement(与 ThirdPerson.Update 同款)。
+            //  Dispose 由 Postfix 正常释放、Finalizer 异常兜底(自存旧值,支持嵌套)。
             __state = P2OriginalScope.Movement();
 
-            Main.p2PersonControllerActive = true;   
+            Main.p2PersonControllerActive = true;   // 显式标志(P2.IsInPersonController):驱动 IsLocalPlayer 补丁与输入门控
             return true;
         }
 
@@ -95,6 +95,9 @@ namespace SplitScreen
         }
 
         static IEnumerable<CodeInstruction> Transpiler(IEnumerable<CodeInstruction> instructions)
+            => TranspilerGuard.Verify(instructions, TranspilerCore);
+
+        static IEnumerable<CodeInstruction> TranspilerCore(IEnumerable<CodeInstruction> instructions)
         {
             var target = AccessTools.PropertyGetter(typeof(ThirdPerson), "ThirdPersonModel");
             var repl = AccessTools.Method(typeof(Patch_PersonController_Update), "CrouchUsesThirdPersonModel");
@@ -143,28 +146,28 @@ namespace SplitScreen
             var p2 = Main.player2;
             if (p2 != null && __instance == p2.PersonController) TickCrouchCompensation(p2, __instance, _p2Comp);
 
-            if (!Main.p2PersonControllerActive) { __state?.Dispose(); return; }   
+            if (!Main.p2PersonControllerActive) { __state?.Dispose(); return; }   // 非 P2(含 P1):__state 为 null
 
             __instance.SetNetworkPosition(__instance.transform.position);
             SplitScreenDeathFlow.TickP2RespawnRestore();
             Main.p2PersonControllerActive = false;
-            __state?.Dispose();   
+            __state?.Dispose();   // 还原 isLocalPlayer=false / ActiveMenu / PlayerContext / P2Mode
         }
 
-        
-        
-        
+        // Finalizer：即使 Update 或 Postfix 抛出异常，也保证 p2PersonControllerActive 复位、
+        // scope 被释放(否则后续帧所有 IsLocalPlayer / Gamepad / IsPressed 永久走 P2 分支，
+        // 或 P2 永久停留在 isLocalPlayer=true / P2Mode=Movement)。Dispose 幂等,与 Postfix 双路径安全。
         static Exception Finalizer(Exception __exception, P2OriginalScope __state)
         {
             Main.p2PersonControllerActive = false;
             __state?.Dispose();
-            return __exception; 
+            return __exception; // 原样抛出，不吞掉
         }
     }
 
-    
-    
-    
+    // ══════════════════════════════════════════════════════════════════════
+    //  Patch 10: Network_Player.IsLocalPlayer — P2 在 PersonController 期间视为本地
+    // ══════════════════════════════════════════════════════════════════════
     [HarmonyPatch(typeof(Network_Player), "get_IsLocalPlayer")]
     static class Patch_Network_Player_IsLocalPlayer
     {
@@ -172,13 +175,13 @@ namespace SplitScreen
         {
             if (Main.p2PersonControllerActive && __instance == Main.player2)
                 __result = true;
-
+                // 注：设备内部的 ReselectCurrentSlot 已被 Patch_Hotbar_ReselectCurrentSlot_P2 抑制，P1 手持模型不受影响。
         }
     }
 
-    
-    
-    
+    // ══════════════════════════════════════════════════════════════════════
+    //  Patch 11: CustomInputConfig.Gamepad — P2 PersonController 期间返回 true
+    // ══════════════════════════════════════════════════════════════════════
     [HarmonyPatch(typeof(CustomInputConfig), "get_Gamepad")]
     static class Patch_CustomInputConfig_Gamepad
     {
@@ -191,9 +194,9 @@ namespace SplitScreen
         }
     }
 
-    
-    
-    
+    // ══════════════════════════════════════════════════════════════════════
+    //  Patch 12: CustomInputConfig.IsPressed — 路由到 P2 专属 action
+    // ══════════════════════════════════════════════════════════════════════
     [HarmonyPatch(typeof(CustomInputConfig), "IsPressed", new Type[] { typeof(InputAction), typeof(string) })]
     static class Patch_CustomInputConfig_IsPressed
     {
@@ -252,7 +255,7 @@ namespace SplitScreen
         }
     }
 
-    
+    // P2 原版上下文/装水：松开 "RMB" → P2 LT 松开(原版很多工具靠 WasReleased 复位状态)。
     [HarmonyPatch(typeof(CustomInputConfig), "WasReleasedThisFrame", new Type[] { typeof(InputAction), typeof(string) })]
     static class Patch_CustomInputConfig_WasReleased_P2Fill
     {
@@ -276,9 +279,9 @@ namespace SplitScreen
         }
     }
 
-    
-    
-    
+    // ══════════════════════════════════════════════════════════════════════
+    //  Patch 13: CustomInputConfig.WasPressedThisFrame — 同上 + P2 射线路由
+    // ══════════════════════════════════════════════════════════════════════
     [HarmonyPatch(typeof(CustomInputConfig), "WasPressedThisFrame", new Type[] { typeof(InputAction), typeof(string) })]
     static class Patch_CustomInputConfig_WasPressedThisFrame
     {
@@ -308,7 +311,7 @@ namespace SplitScreen
                 __result = Main.p2ActionInteract?.WasPressedThisFrame() ?? false;
                 return false;
             }
-            
+            // P2 装水：fill = "Interact" → P2 X
             if (Main._p2FillWaterActive && key == "Interact")
             {
                 __result = Main.p2ActionInteract?.WasPressedThisFrame() ?? false;
@@ -356,17 +359,17 @@ namespace SplitScreen
         }
     }
 
-    
-    
+    // ══════════════════════════════════════════════════════════════════════
+    //  Patch 20: UseItemController.Update — 让 P2 能使用手持工具/攻击（RT 扳机）
     //
-    
-    
-    
-    
-    
-    
-    
-    
+    //  原版门控 `!playerNetwork.IsLocalPlayer` 使 P2(false) 直接 return；且 fireAction
+    //  绑的是 P1 的 "Fire" action。与 P2 移动同款：
+    //   Prefix 把 P2 的 isLocalPlayer 临时写 true（绕 Mono 内联）+ 设 p2UsingItemActive
+    //          + 把 fireAction 字段替换为 P2 的 ActionFire（手柄 RT）。
+    //   随后原版 IsPressed/WasPressedThisFrame(fireAction, useButtonName) 在
+    //   Gamepad(被 patch 成 true) 分支读 P2 扳机 → 触发 Use()。
+    //   Postfix/Finalizer 恢复 isLocalPlayer=false 与标志，使本帧其余阶段仍按远程处理。
+    // ══════════════════════════════════════════════════════════════════════
     [HarmonyPatch(typeof(UseItemController), "Update")]
     static class Patch_UseItemController_Update
     {
@@ -375,8 +378,8 @@ namespace SplitScreen
         static readonly FieldInfo fireActionField =
             typeof(UseItemController).GetField("fireAction", BindingFlags.Instance | BindingFlags.NonPublic);
 
-        
-        
+        // 改用统一的 P2OriginalScope.Tool()：scope 内设 PlayerContext.Active=P2 + isLocalPlayer=true + P2Mode=Tool，
+        //  Dispose 自动恢复(支持嵌套，不用静态 _p2LocalForced)。fireAction 仍替换为 P2 扳机(RT)。
         static bool Prefix(UseItemController __instance, ref P2OriginalScope __state)
         {
             if (Main.player2 == null || Main.p2ActionFire == null) return true;
@@ -394,8 +397,8 @@ namespace SplitScreen
                 return false;
             }
 
-            
-            
+            // P2 菜单(背包/研究台/建造菜单/设备菜单)打开时不使能 P2 工具 —— 否则 RT(如研究台的 RT 研究)
+            //  会同时触发手持工具的使用。不设 Tool scope → 原版 Update 对 P2(isLocalPlayer=false) 早退,工具不动作。
             if (Main.IsP2BackpackOpen || Main.IsP2BuildMenuOpen || Main.IsP2MenuOpen) return true;
 
             var cur = fireActionField?.GetValue(__instance) as InputAction;

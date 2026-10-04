@@ -22,6 +22,7 @@ namespace SplitScreen
     {
         static void Postfix(AttachPlayer __instance)
         {
+            Main.NoteAttachCarrying(__instance);   // 登记"本座位正承载谁",供 FindAttachCarrying 免扫全场景
             var p1 = Main.player1;
             var p2 = Main.player2;
 
@@ -70,13 +71,13 @@ namespace SplitScreen
                 return;
             }
 
-            
+            // 复刻 vanilla 的 flag=true(非本地玩家)分支:P1 可见身体播坐姿动画,与 P2 一致。
             if (__instance.fullBodyAnimation != PlayerFullBodyAnimation.None_0)
                 p1.Animator.SetAnimation(__instance.fullBodyAnimation);
             if (!string.IsNullOrEmpty(__instance.animationBoolParameter) && p1.Animator.anim != null)
                 p1.Animator.anim.SetBool(__instance.animationBoolParameter, true);
 
-            
+            // 钉死身体朝向(对齐 thirdPersonParent 分支,防随视角转)。
             p1.transform.localEulerAngles = Vector3.zero;
             if (p1.playerPivot != null) p1.playerPivot.localEulerAngles = Vector3.zero;
         }
@@ -132,6 +133,6 @@ namespace SplitScreen
 
             return true;
         }
-
+                // 注：设备内部的 ReselectCurrentSlot 已被 Patch_Hotbar_ReselectCurrentSlot_P2 抑制，P1 手持模型不受影响。
     }
 }

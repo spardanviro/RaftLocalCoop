@@ -42,7 +42,6 @@
     <Compile Include="Patches\Patches.SprinklerFix.cs" />
     <Compile Include="Patches\Patches.LocalizationP2.cs" />
     <Compile Include="Patches\Patches.HeadTrackingIK.cs" />
-    <Compile Include="Patches\Patches.P1RaycastDiagnostics.cs" />
     <Compile Include="Patches\Patches.RadioCoroutineDiag.cs" />
     <Compile Include="Runtime\P2RemoteLookPose.cs" />
     <Compile Include="Runtime\P2UnstuckMenu.cs" />

@@ -6,21 +6,21 @@ namespace SplitScreen
 {
     public static partial class Main
     {
-        
-        
+        // ══════════════════════════════════════════════════════════════════
+        //  P2 椅子(PlayerSeat)落座/起身 —— 修复"P2 与椅子交互却让 P1 坐上去"。
         //
-        
-        
-        
+        //  根因:PlayerSeat 用【静态】localPlayer(=ComponentManager<Network_Player>.Value=P1),
+        //   OnIsRayed 的门控/发占座消息/TryTakingSeat 全用它 → P2 瞄椅子按 X,坐的是 P1(被传送+站姿重叠)。
+        //   通用设备路由 RunDeviceRayAsP2 的 localPlayer 覆盖只认【实例】字段,static 覆盖不到。
         //
-        
-        
-        
-        
-        
-        
-        
-        
+        //  做法(对齐床 Main.P2Bed):不跑 vanilla OnIsRayed,由 mod 专门驱动——
+        //   · 占座:InteractionRouter 命中空椅 → [X] 提示 → TakeP2Seat() 在 P2OriginalScope.Interaction()
+        //     内反射调私有 TryTakingSeat(P2)。scope 强制 P2 isLocalPlayer=true,使 AttachPlayer/PlayerSeat
+        //     的 IsLocalPlayer 块作用于 P2(座姿/相机/mouselook/canLeave)。host(P1)本机直跑。
+        //   · 起身:每帧 TickP2Seat 监听 P2 自己的 X → P2OriginalScope.Interaction() 内反射调 LeaveSeat(P2)。
+        //   · AttachPlayer 对任何玩家都 PersonController.enabled=false → P2 落座移动天然冻结。
+        //   · AttachPlayer/PlayerSeat 内 PlayerItemManager.IsBusy(全局静态)会泄漏给 P1 → 前后 save/restore。
+        // ══════════════════════════════════════════════════════════════════
 
         internal static PlayerSeat _p2CurrentSeat;
         internal static bool P2IsSeated => _p2CurrentSeat != null;
@@ -108,6 +108,18 @@ namespace SplitScreen
         static AttachPlayer _attachCache;
         static Network_Player _attachCachePlayer;
         static int _attachCacheFrame = -1;
+        // 父链找不到时的兜底:座位自己在 AttachPlayer.Update 的 Postfix 里登记"我正承载谁",
+        // 这里只需验证登记是否仍成立。全场景扫描降级为每个玩家最多 30 帧一次的保险。
+        static readonly System.Collections.Generic.Dictionary<Network_Player, AttachPlayer> _attachLast =
+            new System.Collections.Generic.Dictionary<Network_Player, AttachPlayer>();
+        static readonly System.Collections.Generic.Dictionary<Network_Player, int> _attachScanFrame =
+            new System.Collections.Generic.Dictionary<Network_Player, int>();
+
+        internal static void NoteAttachCarrying(AttachPlayer attach)
+        {
+            var who = attach != null ? attach.carriedPlayer : null;
+            if (who != null) _attachLast[who] = attach;
+        }
 
         // 该座位是否是雪橇车的驾驶位(且坐的正是该玩家)。
         // ⚠ 有意偏离原版的判据:原版驾驶位也允许自由环视(disableMouseLook=false),
@@ -132,8 +144,22 @@ namespace SplitScreen
                 if (a != null && a.carriedPlayer == player) found = a;
             }
             if (found == null)
-                foreach (var a in Object.FindObjectsOfType<AttachPlayer>())
-                    if (a != null && a.carriedPlayer == player) { found = a; break; }
+            {
+                AttachPlayer last;
+                if (_attachLast.TryGetValue(player, out last) && last != null && last.carriedPlayer == player)
+                    found = last;
+                else
+                {
+                    int lastScan;
+                    if (!_attachScanFrame.TryGetValue(player, out lastScan) || Time.frameCount - lastScan >= 30)
+                    {
+                        _attachScanFrame[player] = Time.frameCount;
+                        foreach (var a in Object.FindObjectsOfType<AttachPlayer>())
+                            if (a != null && a.carriedPlayer == player) { found = a; break; }
+                    }
+                }
+            }
+            _attachLast[player] = found;
 
             _attachCacheFrame = Time.frameCount;
             _attachCachePlayer = player;
@@ -150,13 +176,13 @@ namespace SplitScreen
             return null;
         }
 
-        
+        // 椅子是否有空座。
         internal static bool SeatHasFree(PlayerSeat seat)
         {
             return P2FurnitureAdapter.SeatHasFree(seat);
         }
 
-        
+        // 占座(由 InteractionRouter 命中空椅且 P2 按 X 时调)。返回 true=已坐下。
         internal static bool TakeP2Seat(PlayerSeat seat)
         {
             var np2 = player2;
@@ -179,14 +205,14 @@ namespace SplitScreen
             return ok;
         }
 
-        
+        // 每帧:P2 坐着 → 准心上方「X 起身」提示 + 监听起身。返回 true 表示正坐着(调用方暂停其余 P2 交互)。
         internal static bool TickP2Seat()
         {
             if (player2 == null) return false;
             var seat = _p2CurrentSeat;
             if (seat == null) return false;
 
-            
+            // 被异常脱离(死亡/椅子销毁/被他者移走)→ 清状态 + 恢复手持/视角。
             if (!P2IsSeatedIn(seat)) { ClearP2Seat(); return false; }
             LockP2SeatPose();
 
@@ -217,14 +243,61 @@ namespace SplitScreen
             if (p2.playerPivot != null) p2.playerPivot.localEulerAngles = Vector3.zero;
         }
 
+        // P2 倒地时调用。原版只对"本地玩家"在死亡时做这些收尾(Carry.Update / AttachPlayer 的
+        // IsLocalPlayer 分支),P2 平时是非本地克隆,全被跳过 -> 复活后残留:不能蹲、TP 身体不跟视角、
+        // 动物还挂在身上、望远镜遮罩留在倒地画面上。这里以 P2 作用域把它们正常退出一遍。
+        // 不调 ClearP2Seat/ClearP2Snowmobile:它们会 RefreshP2HeldItem,倒地时不该把手持模型亮出来。
+        internal static void ForceP2ExitTransientStatesForDowned()
+        {
+            var p2 = player2;
+            if (p2 == null) return;
+
+            var carried = P2CarriedObject;
+            if (carried != null)
+            {
+                try
+                {
+                    using (new PlayerItemBusyScope())
+                    using (P2OriginalScope.Interaction())
+                        carried.OnStopCarry?.Invoke(p2, true);   // 与原版 Carry.Update 的死亡分支同参
+                }
+                catch (System.Exception e) { ModEntry.Logger.Log("[P2Downed] 放下搬运物异常: " + e.Message); }
+            }
+
+            if (_p2CurrentSeat != null)
+            {
+                try { P2FurnitureAdapter.LeaveSeat(_p2CurrentSeat, p2); }
+                catch (System.Exception e) { ModEntry.Logger.Log("[P2Downed] 离座异常: " + e.Message); }
+                CloseP2PianoUi();
+                _p2CurrentSeat = null;
+                ClearP2InteractPrompt();
+            }
+
+            if (_p2CurrentSnowmobile != null)
+            {
+                try { P2SnowmobileAdapter.LeaveSeat(_p2CurrentSnowmobile, p2); }
+                catch (System.Exception e) { ModEntry.Logger.Log("[P2Downed] 下车异常: " + e.Message); }
+                _p2CurrentSnowmobile = null;
+                _p2SnowmobileEnterFrame = -1;
+                ClearP2InteractPrompt();
+            }
+
+            // 兜底:座位若已被原版以"非本地"身份脱离,IsAttached 不会被复位。
+            if (p2.PlayerNetworkManager != null) p2.PlayerNetworkManager.IsAttached = false;
+
+            ForceP2BinocOff();
+            ForceResetP2BuildMenu();
+            SplitScreenRuntime.Instance?.UI.CloseUnstuckMenu();
+        }
+
         static void ClearP2Seat()
         {
             CloseP2PianoUi();
             _p2CurrentSeat = null;
             ClearP2InteractPrompt();
-            RefreshP2HeldItem();          
+            RefreshP2HeldItem();          // 重装 P2 手持模型(对齐起床)
             P2CameraController.InitFromCurrentCamera();  
         }
-
+                // 注：设备内部的 ReselectCurrentSlot 已被 Patch_Hotbar_ReselectCurrentSlot_P2 抑制，P1 手持模型不受影响。
     }
 }

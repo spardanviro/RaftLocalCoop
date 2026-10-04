@@ -1,6 +1,6 @@
 # RaftMod — Project Instructions
 
-Raft 本地分屏双人 mod。P1=键鼠(左半屏)，P2=手柄(右半屏)。P2 是 `Network_Player` 克隆(`isLocalPlayer=false`)，与 P1 共享单例系统(PlayerInventory/相机/输入/玩家模型)。反编译的 vanilla 源码在 `SourceCode/`，mod 在 `SplitScreen/`。
+Raft 本地分屏双人 mod。P1=键鼠(左半屏)，P2=手柄(右半屏)。P2 是 `Network_Player` 克隆(`isLocalPlayer=false`)，与 P1 共享单例系统(PlayerInventory/相机/输入/玩家模型)。反编译的 vanilla 源码在 `SourceCode/`，mod 在 `LocalCoop/LocalCoop/LocalCoop/`(RML 版,主)和 `SplitScreen/`(UMM 版,镜像)。
 
 ## 回复语言
 
@@ -8,18 +8,28 @@ Raft 本地分屏双人 mod。P1=键鼠(左半屏)，P2=手柄(右半屏)。P2 �
 
 ## Build / Deploy / Test 流程
 
-每次改动后：
-```bash
-rtk dotnet build -c Release    # 在 SplitScreen/ 目录
-# 拷贝 DLL 到游戏 mods 目录：
-cp bin/Release/SplitScreen.dll "C:/Program Files (x86)/Steam/steamapps/common/Raft/mods/SplitScreen/SplitScreen.dll"
+活跃加载器是 **RaftModLoader(RML)**。两棵源码树内容镜像,只有入口层不同:
+
+- `LocalCoop/LocalCoop/LocalCoop/` — RML 版(主)。入口 `LocalCoop.cs` → `Main.Boot()`。
+- `SplitScreen/` — UMM 版(镜像)。入口 `Main.Load(modEntry)`。
+- 只有 `Main.cs`、`Main.State.cs` 两边不同,改它们要两边各改;其余文件改 LocalCoop,再原样镜像到 SplitScreen。
+- 两个 csproj 都用**显式 `<Compile Include>` 列表** → 新增 .cs 文件必须两边都手动加。
+
+每次改动后一条命令完成 镜像 → 两棵树编译 → 打包 `.rmod` → 部署:
+```powershell
+pwsh -File tools\build-deploy.ps1            # 加 -NoDeploy 只打包不部署
 ```
-- mod 在游戏**启动时**加载 DLL → 改动后用户需**重启 Raft** 才生效。
+只想验 C# 编译(跳过 .rmod 打包后步骤):
+```powershell
+dotnet build LocalCoop\LocalCoop\LocalCoop\LocalCoop.csproj -c Release -p:PostBuildEvent=
+dotnet build SplitScreen\SplitScreen.csproj -c Release -p:PostBuildEvent=
+```
+- `.rmod` 是**打包的源码**(zip),RML 在游戏加载时现编译;部署目标是 `C:\Program Files (x86)\Steam\steamapps\common\Raft\mods\LocalCoop.rmod`。
+- 游戏运行时也能覆盖 `.rmod`,但要**重启 Raft**(或在 RML 里重载 mod)才生效。
+- `SplitScreen.csproj` 的引用是写死层数的相对 HintPath,靠 `SplitScreen\bin\Release\` 里留存的引用 DLL 解析;那个目录别清。
 - 诊断/日志读 `C:/Users/Nero/AppData/LocalLow/Redbeet Interactive/Raft/Player.log`。
-- 所有 shell 命令前缀 `rtk`(含 `&&` 链中的每条)。
 - 每个改动单独 commit，`feat/fix/refactor(P2): ...`，注释和正文用中文。
 - 优先复用 vanilla 函数(直接调用/复刻)，而非重写。
-- `SplitScreen.csproj` 用**显式 `<Compile Include>` 列表** → 新增 .cs 文件必须手动加进去。
 
 ## 工具/环境避坑(本机特定 — 务必遵守)
 
@@ -38,7 +48,7 @@ cp bin/Release/SplitScreen.dll "C:/Program Files (x86)/Steam/steamapps/common/Ra
 - **别给大文件大 limit**:本仓库 .cs 注释密集,Read 把注释显示成空行,大 limit 一次烧上万行上下文。用小 offset/limit 或 PowerShell 输出指定行。
 
 ### Build / 部署物理约束
-- **build/部署前必须先退出 Raft**:游戏运行锁死 `bin/Release/SplitScreen.dll` 与 mods 目录 DLL,新文件写不进 → 哈希永不变(stale DLL 假象)。脚本先 `Get-Process *Raft*` 检测,在跑就提示退出。
+- **(仅 UMM 的 DLL 路径)build/部署前必须先退出 Raft**:游戏运行锁死 `bin/Release/SplitScreen.dll` 与 mods 目录 DLL,新文件写不进 → 哈希永不变(stale DLL 假象)。脚本先 `Get-Process *Raft*` 检测,在跑就提示退出。
 - 判断是否真重编译看新旧哈希是否不同,别只看 BuildOK;部署后比对 src/dst `Get-FileHash`。
 
 ### 与 codex 并行的铁律(用户常开 codex 一起改本项目)

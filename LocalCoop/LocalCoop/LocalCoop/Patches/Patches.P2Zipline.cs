@@ -8,14 +8,14 @@ using UnityEngine.InputSystem;
 
 namespace SplitScreen
 {
-    
-    
-    
-    
-    
-    
-    
-    
+    // ══════════════════════════════════════════════════════════════════════
+    //  Patch: ZiplinePlayer.AttachToZipline — 修 P2 上索 NRE。
+    //   症状:P2 看滑索有提示、按 X 触发挂接,但 AttachToZipline 内 NRE(表面=按X没反应)。
+    //   根因:ZiplinePlayer.Start 用 GetComponentInParent 设 player/lockedPivot/canvas/soundManager,
+    //    P2 克隆在层级就绪前跑了 Start → 这些运行时字段为 null → 挂接首个 player.IsLocalPlayer 即崩。
+    //   修复:挂接前对【P2 的 ZiplinePlayer】补齐这四个字段(空才补) + 按 P2 装备的滑索工具预设模型索引。
+    //   (FP 专属分支因 P2 恒第三人称被跳过;currentModel 由 EnsureP2ThirdPerson 每帧补,通常已就绪。)
+    // ══════════════════════════════════════════════════════════════════════
     [HarmonyPatch(typeof(ZiplinePlayer), "AttachToZipline")]
     static class Patch_ZiplinePlayer_Attach_P2Fix
     {
@@ -37,7 +37,7 @@ namespace SplitScreen
                 _fModelIdx    = t.GetField("currentZiplineModelIndex", bf);
             }
 
-            
+            // 补齐 P2 的运行时字段(Start 时层级未就绪 → 这些为 null,挂索会 NRE)。
             if (_fPlayer?.GetValue(__instance) == null) _fPlayer?.SetValue(__instance, Main.player2);
             if (_fLockedPivot?.GetValue(__instance) == null)
             {
@@ -49,25 +49,25 @@ namespace SplitScreen
             if (_fSound?.GetValue(__instance) == null)
                 _fSound?.SetValue(__instance, ComponentManager<SoundManager>.Value);
 
-            
-            
-            
+            // 模型索引:原版靠 GetEquipmentSlotFromEquipmentType(ZiplineTool) 选(UniqueIndex==549→马达索1,否则基础索0)。
+            //  对 P2 那个调用返回 null(P2 装备不在共享单例槽)→ if 被跳过 → 保留此处预设值。
+            //  据 P2 实际装备的滑索工具预设:不设的话默认恒为 1(马达索)→ 不重力滑、需推杆、马达模型在 P2 身上没装好。
             var tool = P2EquipmentStore.GetEquipped(EquipSlotType.ZiplineTool);
             int idx = (tool != null && tool.baseItem != null && tool.baseItem.UniqueIndex == 549) ? 1 : 0;
             _fModelIdx?.SetValue(__instance, idx);
         }
-
+                // 注：设备内部的 ReselectCurrentSlot 已被 Patch_Hotbar_ReselectCurrentSlot_P2 抑制，P1 手持模型不受影响。
     }
 
-    
-    
-    
-    
-    
-    
-    
-    
-    
+    // ══════════════════════════════════════════════════════════════════════
+    //  P2 滑索 —— 上索已由设备框架覆盖(MeshPath_Zipline 是 IRaycastable：localPlayer→P2 + "Interact"→X +
+    //   HasEquipmentOfTypeEquipped(ZiplineTool) 走共享装备槽，已装则通过 → P2.ZiplinePlayer.AttachToZipline)。
+    //  剩下的缺口是【骑乘】：ZiplinePlayer.Update 门控 IsLocalPlayer，对 P2 跑远端显示分支(UpdateZiplineRemote)。
+    //  做法：把 ZiplinePlayer.Update 整段包进 P2OriginalScope.Tool()(强制本地 → 跑本地骑乘分支：移动/马达/脱离)。
+    //   - 马达 inputMove.ReadValue<Vector2>()(读 P1 移动轴=0)→ transpiler 换 P2HookAim.ReadMove(读 P2 左摇杆)。
+    //   - 脱离 WasPressedThisFrame("Cancel"/"Jump")→ 下面 CIC 补丁在 IsP2OriginalActive 时路由到 P2 B/A。
+    //  (P2 恒第三人称：AttachToZipline 里 FP 专属分支被跳过，走第三人称路径。)
+    // ══════════════════════════════════════════════════════════════════════
     [HarmonyPatch(typeof(ZiplinePlayer), "Update")]
     static class Patch_ZiplinePlayer_Update_P2
     {
@@ -107,8 +107,11 @@ namespace SplitScreen
         }
         static void Cleanup(HookP2State st) { if (st == null) return; st.Ctx?.Dispose(); st.Ctx = null; }
 
-        
+        // 马达模拟量：inputMove.ReadValue<Vector2>() → P2HookAim.ReadMove(读 P2 左摇杆)。
         static IEnumerable<CodeInstruction> Transpiler(IEnumerable<CodeInstruction> instructions)
+            => TranspilerGuard.Verify(instructions, TranspilerCore);
+
+        static IEnumerable<CodeInstruction> TranspilerCore(IEnumerable<CodeInstruction> instructions)
         {
             var readVec = AccessTools.Method(typeof(InputAction), "ReadValue", Type.EmptyTypes, new[] { typeof(UnityEngine.Vector2) });
             var repl    = AccessTools.Method(typeof(P2HookAim), "ReadMove");
@@ -120,9 +123,9 @@ namespace SplitScreen
         }
     }
 
-    
-    
-    
+    //  P2 脱离滑索:① 下一帧重装手持(EquipP2)→ 解决"脱离后手持工具模型不显示,需切栏才出现"
+    //   (滑索时模型被 HideItemInHand 隐藏,原版 ReselectCurrentSlot 重显的是共享热栏,非 P2 自定义手持)。
+    //  ② 保留诊断 [ZipDetach](排查偶发"脱离穿筏掉水":位置/碰撞体/外部速度/父节点)。
     [HarmonyPatch(typeof(ZiplinePlayer), "DetachFromCurrentZipline")]
     static class Patch_ZiplinePlayer_Detach_ViewState
     {
@@ -133,7 +136,11 @@ namespace SplitScreen
             bool isP2 = np != null && np == Main.player2;
             if (!isP1 && !isP2) return;
             if (isP1) AlignP1RootYawToCamera(np);
-            if (isP2) Main._p2RefreshHeldNextFrame = true;
+            if (isP2)
+            {
+                Main._p2RefreshHeldNextFrame = true;
+                Main.SuppressP2CrouchOnExit();   // B 同时绑着取消和蹲:按 B 脱离滑索不应落地即蹲
+            }
         }
 
         internal static void AlignP1RootYawToCamera(Network_Player np)
@@ -171,7 +178,7 @@ namespace SplitScreen
             float yaw = mx.isChild ? mx.transform.localEulerAngles.y : mx.transform.eulerAngles.y;
             mx.SetTargetRotX(yaw, false);
         }
-
+                // 注：设备内部的 ReselectCurrentSlot 已被 Patch_Hotbar_ReselectCurrentSlot_P2 抑制，P1 手持模型不受影响。
     }
 
     
@@ -332,8 +339,8 @@ namespace SplitScreen
             var anim = np != null && np.Animator != null ? np.Animator.anim : null;
             if (anim == null) return;
             for (int i = 0; i < _saved.Count && i < anim.layerCount; i++)
-                anim.Play(_saved[i].hash, i, _saved[i].time);   
-            anim.Update(0f);                                    
+                anim.Play(_saved[i].hash, i, _saved[i].time);   // 跳回切换前的状态(滑索姿势),不走重入过渡
+            anim.Update(0f);                                    // 立即应用,消除一帧默认态(否则仍闪一下重装动画)
         }
     }
 
@@ -386,38 +393,38 @@ namespace SplitScreen
         }
     }
 
-    
-    
-    
-    
-    
-    
-    
+    // ══════════════════════════════════════════════════════════════════════
+    //  Phase B 功能门控:P2 上下文(设备射线/工具)里 HasEquipmentOfTypeEquipped 读【P2 装备集】。
+    //   原版读 localPlayer.Inventory(共享单例=P1)的 equipSlots → P2 滑索判定会误读 P1 的装备。
+    //   滑索 OnIsRayed(isProcessingP2Ray 期)的 HasEquipmentOfTypeEquipped(ZiplineTool) 据此对 P2 正确:
+    //    P2 装了滑索工具 → 显示 Attach(X);没装 → "需要滑索工具",不显示 X。
+    //   (护甲减伤无需门控:Equipment_ArmorPiece 走 P2 自己的 ArmorHandler,Phase A 的 EquipItemNetwork 已使其生效。)
+    // ══════════════════════════════════════════════════════════════════════
     [HarmonyPatch(typeof(PlayerInventory), "HasEquipmentOfTypeEquipped")]
     static class Patch_PlayerInv_HasEquip_P2
     {
         static bool Prefix(EquipSlotType equipmentType, ref bool __result)
         {
-            if (!(Main.isProcessingP2Ray || Main.IsP2OriginalActive)) return true;   
+            if (!(Main.isProcessingP2Ray || Main.IsP2OriginalActive)) return true;   // 非 P2 上下文 → 原版(P1)
             __result = P2EquipmentStore.HasEquipped(equipmentType);
             return false;
         }
     }
 
-    
-    
-    
-    
-    
-    
-    
+    // ══════════════════════════════════════════════════════════════════════
+    //  Patch: PlayerItemManager.ShouldItBeBusy — 对 P2 做 null 安全。
+    //   原版逐个访问 value.BedComponent/CarryingComponent/ZiplinePlayer/PlayerNetworkManager.xxx,
+    //   P2 克隆体某些子组件为空 → 滑索脱离(StopCarryingPlayer→ShouldItBeBusy)NRE → 脱离不完成 →
+    //   IsBusy(静态共享)卡住 → P1 也开不了背包/ESC + 双方姿势残留。
+    //   修复:仅当 value==P2 时逐项 null 安全计算;P1 走原版(零影响)。
+    // ══════════════════════════════════════════════════════════════════════
     [HarmonyPatch(typeof(PlayerItemManager), "ShouldItBeBusy")]
     static class Patch_PIM_ShouldItBeBusy_P2Safe
     {
         static bool Prefix(ref bool __result)
         {
             var v = ComponentManager<Network_Player>.Value;
-            if (v == null || v != Main.player2) return true;   
+            if (v == null || v != Main.player2) return true;   // 非 P2 → 原版
             __result = (v.BedComponent != null && v.BedComponent.Sleeping)
                     || (v.CarryingComponent != null && v.CarryingComponent.IsCarrying)
                     || (v.ZiplinePlayer != null && v.ZiplinePlayer.IsAttachedToZipline)
@@ -461,8 +468,8 @@ namespace SplitScreen
         }
     }
 
-    
-    
+    // P2 工具/原版上下文期间，把 "Jump"/"Cancel" 的 WasPressedThisFrame 路由到 P2 A/B(滑索脱离用)。
+    //  其它键不动；窗口外(P1)走原版。与建造 CIC 补丁键不重叠(LMB/Rotate/Remove/BlockPick)，无冲突。
     [HarmonyPatch(typeof(CustomInputConfig), "WasPressedThisFrame", new Type[] { typeof(InputAction), typeof(string) })]
     static class Patch_CIC_WasPressed_P2JumpCancel
     {
@@ -480,14 +487,14 @@ namespace SplitScreen
         }
     }
 
-    
-    
-    
-    
-    
-    
-    
-    
+    // ══════════════════════════════════════════════════════════════════════
+    //  P2ZiplineDriver —— 每帧手动驱动 P2 的 ZiplinePlayer.Update。
+    //   根因(对比源码):P2 是 Network_Player 克隆,其 ZiplinePlayer 物体未激活 → Unity 不调它的 Update
+    //    → 持续骑乘逻辑(移动/模型维持/脱离/相机锁,全在 Update 里)从未运行;只有一次性的 AttachToZipline 跑了。
+    //   做法(同 P2ToolRunner):反射调 ZiplinePlayer.Update()。该调用会触发已挂的 Patch_ZiplinePlayer_Update_P2
+    //    (Prefix 设 P2FrameContext.Tool() 强制本地 → 跑本地骑乘分支;Transpiler 把马达输入换 P2 左摇杆)。
+    //   单次执行:物体未激活 → Unity 不会另调一次,无双跑。
+    // ══════════════════════════════════════════════════════════════════════
     internal static class P2ZiplineDriver
     {
         static ZiplinePlayer _zp;
@@ -501,14 +508,14 @@ namespace SplitScreen
             // (HandleThirdPerson 把滑索误当网络附着座位而锁座姿跳过相机驱动 = TP相机冻结根因)。
             var real = Main.player2.ZiplinePlayer;
             _zp = real != null ? real : Main.player2.GetComponentInChildren<ZiplinePlayer>(true);   
-            
-            
-            
+            // 激活该物体:① 子模型(ziplineTool/Electric)activeInHierarchy→true 才能渲染;② Unity 接管 tick 它的 Update
+            //  (经 Patch_ZiplinePlayer_Update_P2 在 P2 上下文跑骑乘);③ 其 Start 跑→player/lockedPivot/canvas/sound 自动就位。
+            //  克隆体默认未激活(故之前 Unity 不 tick、模型不渲染、字段为 null)。
             if (_zp != null && !_zp.gameObject.activeSelf) _zp.gameObject.SetActive(true);
             return _zp;
         }
 
-        
+        // P2 是否正挂在滑索上(供 Hammer/工具/建造 tick 据此让路)。
         internal static bool IsAttached { get { var zp = Zip(); return zp != null && zp.IsAttachedToZipline; } }
 
         internal static void Reset()
@@ -517,7 +524,7 @@ namespace SplitScreen
             P2ZiplineRopeBuilder.Reset();
         }
 
-        
+        // 每帧调用:确保 ZiplinePlayer 物体已激活(Zip 内做)→ Unity 接管 tick 其 Update(经补丁在 P2 上下文跑骑乘),无需手动反射驱动。
         internal static void Tick() { Zip(); }
 
         // P2 挂滑索时保持 ZiplinePlayer GO 激活。vanilla 恒 active(只 toggle 子物体);mod 把它当
@@ -576,6 +583,9 @@ namespace SplitScreen
         }
 
         static IEnumerable<CodeInstruction> Transpiler(IEnumerable<CodeInstruction> instructions)
+            => TranspilerGuard.Verify(instructions, TranspilerCore);
+
+        static IEnumerable<CodeInstruction> TranspilerCore(IEnumerable<CodeInstruction> instructions)
         {
             var target = AccessTools.Method(typeof(Physics), "Raycast", new[] {
                 typeof(Vector3), typeof(Vector3), typeof(RaycastHit).MakeByRefType(),

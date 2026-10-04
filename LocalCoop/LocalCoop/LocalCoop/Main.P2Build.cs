@@ -8,24 +8,24 @@ namespace SplitScreen
 {
     public static partial class Main
     {
-        
-        
+        // ══════════════════════════════════════════════════════════════════
+        //  P2 建造系统(阶段1：核心闭环) —— 复用 P2 自己的 BlockCreator(每玩家一个)
         //
-        
-        
-        
-        
-        
-        
-        
-        
-        
-        
-        
-        
+        //  原版 BlockCreator.Update 门控 playerNetwork.IsLocalPlayer，且输入走
+        //  CustomInputConfig(读 PlayerInput[0]=P1)。做法(同 UseItemController 套路)：
+        //   - Patch_BlockCreator_Update_P2：P2 的 BlockCreator.Update 期间临时把 P2 当本地玩家，
+        //     并置 _p2BuildActive；结束还原。
+        //   - Patch_CustomInputConfig_*_P2Build：_p2BuildActive 期间把建造按键("LMB"放置等)
+        //     重定向到 P2 手柄(RT)。
+        //   - colliderPrefabEnabler 原本仅本地玩家在 Start 创建 → 这里给 P2 补建(否则 Update 空引用)。
+        //  阶段1：默认方块=地基(BlockCreator.Start 已 SetBlockTypeToBuild("Block_Foundation"))，
+        //         先实现 幽灵预览 + RT 放置；旋转/拆除/建造菜单后续阶段。
+        // ══════════════════════════════════════════════════════════════════
+        // 折叠进 P2Mode：BlockCreator.Update 与 Hammer.Update 都走 P2OriginalScope.Build() → P2Mode=Build，
+        //  故"建造/修理/加固期间"= P2Mode==Build(锤的旧标志 _p2HammerActive 并入此，已删字段)。读取点 Main._p2BuildActive 不变。
         internal static bool _p2BuildActive => P2Mode == P2OriginalMode.Build;
-        
-        
+        // 移除工具特殊：RemovePlaceables.Update 对 P2 实例【始终】置真(含菜单内，用于屏蔽共享 DTM)，
+        //  比 Build scope 窗口更宽 → 不能由 P2Mode 计算，保留为字段。
         internal static bool _p2RemoveActive;
         
         
@@ -49,8 +49,8 @@ namespace SplitScreen
         static FieldInfo _fDtmDisplayTexts;
         static CostCollection _p2BuildCostCursor;
 
-        
-        
+        // 幽灵方块当前是否可见(= 正对准一个可放置的有效面)。原版 SetGhostBlockVisibility(quadAtCursor!=null)
+        //  控制 selectedBlock 的激活态；据此让 放置提示 只在"看向有效目标"时显示(按射线目标驱动)。
         internal static bool IsP2PlaceableGhostVisible(BlockCreator bc)
         {
             if (bc == null) return false;
@@ -100,13 +100,13 @@ namespace SplitScreen
         internal static void ResetP2Build()
         {
             _p2BlockCreator = null; _p2Hammer = null; _p2Axe = null;
-            _p2RemoveActive = false;   
+            _p2RemoveActive = false;   // (_p2BuildActive/_p2HammerActive 已折叠进 P2Mode，无字段可清)
             _p2LoadCircle = null;
             if (_p2BuildCostCursor != null) Object.Destroy(_p2BuildCostCursor.gameObject);
             _p2BuildCostCursor = null;
         }
 
-        
+        // 每帧(由 Runtime.Tick 调用)：持锤=展示原版捕获的建造提示(LT/旋转/模块选择)；持斧=拆除提示。
         internal static void TickP2Build()
         {
             var gp = GetP2BoundGamepad();
@@ -116,16 +116,16 @@ namespace SplitScreen
             // 拿连接锚时仿 vanilla(ConnectStandWithThrowable 的 SelectUsable 把手持切走使锤子失活):
             // 视为未持锤 → 不进建造菜单/放置逻辑,LT 只归锚放回。
             bool hammer = bc != null && bc.gameObject.activeInHierarchy && !IsP2AnchorBusy;
-            bool placeable = hammer && bc.aimingWithPlaceable;               
+            bool placeable = hammer && bc.aimingWithPlaceable;               // 持可放置物(椅子/床/作物盆…)→放置模式
 
             TickP2BuildCostCursor(bc, hammer);
 
-            if (hammer && !placeable && !IsP2BackpackOpen) TickP2BuildMenuHold(gp);  
+            if (hammer && !placeable && !IsP2BackpackOpen) TickP2BuildMenuHold(gp);  // 按住 LT = 建造菜单(放置模式无菜单，对齐原版)
             if (_p2BuildMenuOpen) { ClearP2Prompts(); return; }
             if (GlobalBlocksP2 || IsP2BackpackOpen) { ClearP2Prompts(); return; }
 
-            
-            
+            // 持可放置物：仅在【看向有效可放置面(幽灵可见)】时显示 RT放置+旋转提示(按射线目标驱动)。
+            //  对准箱子(交互提示)或已放置可移除物(移除提示)时隐藏，避免重叠；看向无效处则不显示。
             if (placeable)
             {
                 if (IsP2InteractPromptActive || IsP2RemovePromptActive || !IsP2PlaceableGhostVisible(bc)) ClearP2Prompts();
@@ -133,15 +133,15 @@ namespace SplitScreen
                 return;
             }
 
-            
-            
-            
+            // 持锤：提示由【捕获原版 BlockCreator/Hammer.Update 发出的 DTM 提示】驱动(时机/逻辑与原版一致)。
+            //  按射线目标优先：对准箱子(交互提示)或可移除的可放置物(移除提示)时，隐藏锤子建造提示条，
+            //  只显示该目标对应的提示，避免锤子提示与目标提示并列。
             if (hammer) { if (IsP2InteractPromptActive || IsP2RemovePromptActive) ClearP2Prompts(); else PushCapturedPrompts(); return; }
 
             var axe = GetP2Axe();
             if (axe != null && axe.gameObject.activeInHierarchy) { DriveAxePrompts(); return; }
 
-            
+            // 持可食用消耗品(食物/水)：显示 吃/喝 提示(RT)。
             var heldItem = GetP2HeldHotbarItem();
             var cc = heldItem?.baseItem?.settings_consumeable;
             if (cc != null && cc.FoodForm != FoodForm.None
@@ -154,9 +154,9 @@ namespace SplitScreen
                 return;
             }
 
-            
-            
-            ExpireP2BaitPrompt();   
+            // 持杯/瓶等(非建造工具)：装水/倒水/喝吃提示由 FillWaterComponent 等捕获到 _capList →
+            //  这里推送(新鲜则显示，过期则清空)。对准箱子时让位给交互提示。
+            ExpireP2BaitPrompt();   // 鱼竿"选择诱饵"竖排提示过期则清(移开水面/收竿)
             if (IsP2InteractPromptActive) { ClearP2Prompts(); return; }
             PushCapturedPrompts();
         }
@@ -312,7 +312,7 @@ namespace SplitScreen
             SetP2Prompts(items);
         }
 
-        
+        // ── P2 拆除进度环(克隆原版 removeBlockRadialImage 到 P2 半屏中心) ──────
         static Image _p2LoadCircle;
         static int _p2LoadCircleLastSetFrame;   // vanilla 每帧刷则更新;停刷超1帧→对账隐藏(防蓄满卡住)
 
@@ -323,12 +323,12 @@ namespace SplitScreen
             if (ch == null || ch.removeBlockRadialImage == null) return;
             var clone = Object.Instantiate(ch.removeBlockRadialImage.gameObject, _p2HudCanvas.transform);
             clone.name = "P2_LoadCircle";
-            var anim = clone.GetComponent<Animator>(); if (anim != null) Object.Destroy(anim);   
+            var anim = clone.GetComponent<Animator>(); if (anim != null) Object.Destroy(anim);   // 去掉动画器(脉冲)，只用 fillAmount
             var rt = clone.GetComponent<RectTransform>();
             if (rt != null)
             {
                 rt.anchorMin = rt.anchorMax = new Vector2(0.5f, 0.5f); rt.pivot = new Vector2(0.5f, 0.5f);
-                rt.anchoredPosition = Vector2.zero;            
+                rt.anchoredPosition = Vector2.zero;            // 与准心重合(蓄力/进度环居中)
             }
             _p2LoadCircle = clone.GetComponent<Image>() ?? clone.GetComponentInChildren<Image>();
             int uiLayer = LayerMask.NameToLayer("UI"); if (uiLayer >= 0) SetLayerRecursively(clone.transform, uiLayer);
@@ -361,7 +361,7 @@ namespace SplitScreen
             if (_p2LoadCircle.gameObject.activeSelf != on) _p2LoadCircle.gameObject.SetActive(on);
         }
 
-        
+        // 为 P2 的 BlockCreator 补建 colliderPrefabEnabler(原版仅本地玩家在 Start 建)。
         internal static void EnsureP2BuildInit(BlockCreator bc)
         {
             if (bc == null) return;
@@ -372,24 +372,24 @@ namespace SplitScreen
                 _fBcColliderPrefab  = t.GetField("colliderPrefabEnablerPrefab", BindingFlags.Instance | BindingFlags.NonPublic);
             }
             if (_fBcColliderEnabler == null) return;
-            if (_fBcColliderEnabler.GetValue(bc) != null) return;          
+            if (_fBcColliderEnabler.GetValue(bc) != null) return;          // 已有
             if (player2 == null || player2.Camera == null) return;
             var prefab = _fBcColliderPrefab?.GetValue(bc) as Component;
             if (prefab == null) return;
             var inst = Object.Instantiate(prefab, player2.Camera.transform);
             inst.transform.localPosition = Vector3.zero;
             _fBcColliderEnabler.SetValue(bc, inst);
-            
-            
-            
-            
-            
-            
+            // P2 强制第三人称：相机被拉远(~2.4m)，建造目标方块约在相机前 4m。
+            //  colliderPrefabEnabler 是跟随相机的球形触发器，仅给【球内】方块挂上其细节碰撞体预制(含
+            //  BuildQuad_Center/Quad_Foundation —— 可放置物要命中的那个 quad)。原版在 Awake 的本地玩家分支挂
+            //  OnThirdpersonModelChange 委托来调 SetColliderSizeFromThirdpersonState；P2(克隆,非本地)跳过了，
+            //  球半径停留在第一人称默认值(3.5m) → 4m 外的方块在球外 → BuildQuad_Center 没被挂 → 可放置物放不下。
+            //  P2 恒为第三人称，这里直接把半径设为第三人称值(10m)。
             var cpe = inst as ColliderPrefabEnabler;
             if (cpe != null) cpe.SetColliderSizeFromThirdpersonState(true);
-            
-            
-            
+            // P2 的 buildMenu 未初始化(原版仅本地玩家 Awake 分支调 buildMenu.Initialize)。Hammer.Update 的
+            //  HandleRepairingAndReinforcement 读 blockCreator.buildMenu.lastSelectedBuildabe → P2 每帧空引用刷屏。
+            //  指给共享单例 BuildMenu(只读 lastSelectedBuildabe)即可消除 NRE，不调 Initialize(不抢 P1 绑定)。
             if (bc.buildMenu == null)
             {
                 var bm = ComponentManager<BuildMenu>.Value;

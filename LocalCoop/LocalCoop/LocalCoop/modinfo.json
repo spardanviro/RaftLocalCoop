@@ -1,10 +1,10 @@
 {
   "name": "LocalCoop",
   "slug": "localcoop",
-  "author": "",
+  "author": "Nero",
   "description": "",
-  "version": "1.0",
-  "license": "GNU AGPLv3",
+  "version": "1.0.0",
+  "license": "MIT",
   "icon": "icon.png",
   "banner": "banner.jpg",
   "gameVersion": "1.0",

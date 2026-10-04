@@ -6,22 +6,22 @@ using UnityEngine;
 
 namespace SplitScreen
 {
-    
-    
+    // ══════════════════════════════════════════════════════════════════════
+    //  P2 近战攻击 —— 让 P2 持近战武器(矛/剑/拳套等)能命中敌人。
     //
-    
-    
-    
-    
+    //  原版 MeleeWeapon 的命中走【动画事件】(OnMeleeHit / OnMeleeWeaponSuccesfullRayHit[All])，
+    //  在挥击动画帧触发，门控 playerNetwork.IsLocalPlayer，且内部射线用 Helper.HitAtCursor/
+    //  SphereHitAtCursor(全屏中心)。动画事件在 P2ToolRunner 的 scope 之外触发，那一刻 P2 的真实
+    //  isLocalPlayer=false → 原版直接 return，P2 打不到东西。
     //
-    
-    
-    
-    
-    
+    //  做法(复用统一代理层)：把这些命中方法整段包进 P2OriginalScope.Tool() ——
+    //   scope 内 isLocalPlayer 被强制为 true(过门控)、IsP2OriginalActive=true(AimRay 用 P2 相机
+    //   且跳过 P2 自身碰撞体)、p2UsingItemActive=true(耐久扣减路由到 P2 手持)。退出还原。
+    //  仅当该武器属于 P2 时进入 scope；P1 的武器 np!=player2 → 不进 scope，原版照常。
+    //  挥击动画本身由 UseItemController.Use(已 Tool scope, RT 扳机)触发，无需额外处理。
     //
-    
-    
+    //  注：scope 可嵌套；OnMeleeHit→OnMeleeWeaponSuccesfullRayHit 都被包裹时为嵌套 scope，安全。
+    // ══════════════════════════════════════════════════════════════════════
 
     static class P2CombatScope
     {
@@ -109,7 +109,7 @@ namespace SplitScreen
             {
                 source.Inventory.RemoveDurabillityFromHotSlot();
             }
-
+                // 注：设备内部的 ReselectCurrentSlot 已被 Patch_Hotbar_ReselectCurrentSlot_P2 抑制，P1 手持模型不受影响。
         }
 
         static bool TryHitOtherLocalPlayer(MeleeWeapon tool, Network_Player source, out RaycastHit hit, out Network_Player target)
@@ -370,8 +370,8 @@ namespace SplitScreen
         static Exception Finalizer(Exception __exception, P2MeleeState __state) { __state?.Dispose(); return __exception; }
     }
 
-    
-    
+    // 部分武器的动画事件直接调 OnMeleeWeaponSuccesfullRayHit / ...RayHitAll(不经 OnMeleeHit)。
+    //  也包裹之；若由已包裹的 OnMeleeHit 调进来则为嵌套 scope(安全)。
     [HarmonyPatch(typeof(MeleeWeapon), "OnMeleeWeaponSuccesfullRayHit")]
     static class Patch_MeleeWeapon_RayHit_P2
     {
@@ -435,7 +435,7 @@ namespace SplitScreen
             var np = __instance.GetComponentInParent<Network_Player>();
             if (np == null || np != Main.player2) return;
 
-            
+            // 读/扣 P2 弹药 → routeInventory；蓄力期全局 IsBusy save/restore(独立于 Ctx)。
             __state = new ThrowableCompP2State
             {
                 Busy = new PlayerItemBusyScope(),
@@ -454,23 +454,26 @@ namespace SplitScreen
         }
     }
 
-    
+    // 基类 HandleLocalClient 的蓄力 ReadValue<float>() → P2 右扳机模拟量(bow 子类 override 调 base，故补基类即可)。
     [HarmonyPatch(typeof(ThrowableComponent), "HandleLocalClient")]
     static class Patch_ThrowableComponent_HandleLocalClient_ReadValueP2
     {
         static IEnumerable<CodeInstruction> Transpiler(IEnumerable<CodeInstruction> instructions)
+            => TranspilerGuard.Verify(instructions, TranspilerCore);
+
+        static IEnumerable<CodeInstruction> TranspilerCore(IEnumerable<CodeInstruction> instructions)
             => HookReadValueTranspiler.Replace(instructions);
     }
 
-    
-    
-    
-    
-    
-    
-    
-    
-    
+    // ══════════════════════════════════════════════════════════════════════
+    //  P2 远程武器·真正发射(Throw) —— 修复"不消耗弹药 + 箭无碰撞穿过木筏"。
+    //   Throw 由 StartThrow【协程】(WaitForSeconds 后)在【Update 的 scope 之外】调用，那一刻 P2 真实
+    //   isLocalPlayer=false → 原版:
+    //     · `if (IsLocalPlayer) Inventory.RemoveItem(ammo,1)` 跳过 → 不消耗箭；
+    //     · `arrow.Initialize(..., colliderEnabled = IsLocalPlayer=false)` → 箭无碰撞体 → 穿过一切落水。
+    //   修复：把 Throw 整段包进 P2OriginalScope.Tool()(强制 isLocalPlayer=true) + P2InventoryScope(与读弹药同一
+    //   背包状态，RemoveItem 命中正确槽)。于是扣箭 + 箭开启碰撞体 → 命中后 HandleCollision 插住(host)并启用拾取碰撞体(可重复拾取)。
+    // ══════════════════════════════════════════════════════════════════════
     [HarmonyPatch(typeof(ThrowableComponent), "Throw")]
     static class Patch_ThrowableComponent_Throw_P2
     {

@@ -9,25 +9,25 @@ namespace SplitScreen
 {
     public static partial class Main
     {
-        
-        
+        // ══════════════════════════════════════════════════════════════════
+        //  P2 独立背包 —— 混合方案：把【真原版背包面板】搬到 P2 右半屏 + 自建虚拟光标
         //
-        
+        //  目标：P2 按 Y 在自己半屏出现背包，用左摇杆光标操作；P1 期间照常游玩。
         //
-        
-        
-        
-        
-        
-        
-        
+        //  做法（不碰 PlayerInput[0] → P1 不冻结；不调 OpenMenu → actionMap 仍是 "Player"）：
+        //    打开：P2InventoryStore.SwapInP2() 把 P2 内容换进真实 PlayerInventory →
+        //          把真 Inventory_Player 面板 reparent 到 _p2HudCanvas(右半屏) + 激活 + 刷新槽位 →
+        //          建/显示自建虚拟光标(读 P2 手柄左摇杆)。
+        //    操作：光标命中真 Slot；A 抓取/放下/堆叠/交换(直接改 slot.itemInstance + RefreshComponents)，
+        //          复用真槽位的视觉刷新；手持物用自建图标跟随光标。
+        //    关闭：还原面板父子/激活/位置 → SwapOutP2() 存回 P2、恢复 P1。
         //
-        
-        
+        //  限制：背包是单例，P2 开背包期间 P1 不能同时开自己的背包(已用补丁拦截)。
+        // ══════════════════════════════════════════════════════════════════
         static bool _p2BackpackOpen;
         internal static bool IsP2BackpackOpen => _p2BackpackOpen;
 
-        
+        // P2 开背包期间临时改了【全局共享】背包槽激活数为 P2 的;-1=未保存。关背包还原 P1。
         static int _p1BackpackActiveSlots = -1;
 
         
@@ -99,7 +99,7 @@ namespace SplitScreen
         static PlayerInventory _p2BackpackView;
         static GameObject _p2BackpackViewGo;
 
-        
+        // 自建虚拟光标 + 手持物
         static RectTransform _p2InvCursor;
         static Vector2       _p2InvCursorPos;
         static Image         _p2HeldIcon;
@@ -108,12 +108,12 @@ namespace SplitScreen
         static Slot          _p2HeldOriginSlot;
         static int           _p2HeldOriginHotbar = -1;
         static bool          _wasABp;
-        static bool          _aPending;          
-        static float         _aPressT;           
+        static bool          _aPending;          // A 已按下、等待判定 轻按(整摞)/按住(一半)
+        static float         _aPressT;           // A 按下时刻(unscaled)
         static bool          _p2HeldDropPromptShown;
-        const float P2HoldHalfDelay = 0.3f;      
+        const float P2HoldHalfDelay = 0.3f;      // 按住 A 超过此时长 = 移动一半
 
-        
+        // 悬停高亮（kind: 0 无 / 1 真背包 Slot / 2 P2 自建热栏）
         static Slot  _p2HoverSlot;       // kind 1
         static int   _p2HoverHotbar = -1;
         static Image _p2HoverSlotBg;
@@ -156,7 +156,7 @@ namespace SplitScreen
             int uiLayer = LayerMask.NameToLayer("UI");
             if (uiLayer >= 0) SetLayerRecursively(panel, uiLayer);
             pinv.gameObject.SetActive(true);
-
+            // 背包槽激活数是【全局共享】:先存 P1 的,再按 P2 装备的背包扩展(无则收为 0)。关背包还原。
             _p1BackpackActiveSlots = CountActiveBackpackSlots(pinv);
             pinv.SetBackpackActiveSlots(P2EquipmentStore.P2BackpackExtraSlots());
             RefreshRealSlots(pinv);
@@ -179,6 +179,7 @@ namespace SplitScreen
         }
 
         internal static PlayerInventory P2ViewOrNull => _p2BackpackView;
+        internal static ItemInstance P2HeldOrNull => _p2Held;
 
         static Network_Player _p2InventoryFieldOwner;
         static PlayerInventory _p2InventoryFieldOriginal;
@@ -309,17 +310,37 @@ namespace SplitScreen
             CloseP2BackpackClone();
         }
 
+        // 关包时光标上还拿着东西:按 来源格(若仍空) -> 背包(先叠后空) -> 手持栏 -> 掉在脚下 的顺序安置。
+        // 旧实现只试"第一个空背包格",背包满时直接把物品丢弃(来自手持栏/装备槽/箱子的物品就此消失)。
+        static void StowP2HeldOnClose(PlayerInventory pinv)
+        {
+            var held = _p2Held;
+            _p2Held = null;
+            if (held == null || !held.Valid) return;
+
+            if (_p2HeldOriginSlot != null && _p2HeldOriginSlot.IsEmpty) { _p2HeldOriginSlot.SetItem(held); return; }
+            if (_p2HeldOriginHotbar >= 0 && _p2Hotbar != null && _p2HeldOriginHotbar < _p2Hotbar.Length
+                && _p2Hotbar[_p2HeldOriginHotbar] == null)
+            {
+                _p2Hotbar[_p2HeldOriginHotbar] = held;
+                UpdateP2Hotbar();
+                return;
+            }
+
+            MoveStackIntoSlots(held, NonHotbarSlots(pinv));
+            if (held.Amount > 0) { MoveStackIntoHotbar(held); UpdateP2Hotbar(); }
+            if (held.Amount > 0 && player2 != null && player2.CameraTransform != null && player2.PersonController != null)
+                Helper.DropItem(held, player2.transform.position, player2.CameraTransform.forward,
+                                player2.PersonController.HasRaftAsParent);
+        }
+
         static bool CloseP2BackpackClone()
         {
             if (_p2BackpackView == null) return false;
             _p2BackpackOpen = false;
 
             var pinv = _p2BackpackView;
-            if (_p2Held != null)
-            {
-                foreach (var s in pinv.allSlots)
-                    if (s != null && s.slotType != SlotType.Hotbar && s.IsEmpty) { s.SetItem(_p2Held); _p2Held = null; break; }
-            }
+            if (_p2Held != null) StowP2HeldOnClose(pinv);
 
             _p2Held = null;
             ClearP2HeldOrigin();
@@ -346,7 +367,7 @@ namespace SplitScreen
             return true;
         }
 
-        
+        // 世界拆除/重置：不碰原版菜单，仅尽力还原面板 + 复位数据。
         internal static void ForceResetP2Backpack()
         {
             RestoreP2InventoryField();
@@ -362,16 +383,16 @@ namespace SplitScreen
             }
             try { CloseP2Storage(); }
             catch (Exception e) { LogV("[P2Backpack] ForceReset CloseP2Storage ignored: " + e.Message); }
-            try { P2InventoryStore.Reset(); }
+            try { P2InventoryStore.AbandonSwap(); }   // 不清 _p2Slots:倒地时开着菜单不该丢背包
             catch (Exception e) { LogV("[P2Backpack] ForceReset inventory store reset ignored: " + e.Message); }
             _p2BackpackOpen = false; _p2Held = null;
             ClearP2HeldOrigin();
             ClearP2HeldDropPrompt();
         }
 
-        
-        
-        
+        // ── P2 箱子 UI（P2 半屏 + 光标，不冻结 P1）─────────────────────────
+        //  和混合背包一脉相承：打开 P2 背包(reparent P2 真背包) + 把箱子格栅 reparent 到 P2 半屏背包上方；
+        //  光标命中检测扩展到箱子格(箱子格也是真 Slot → 复用 ClickHoveredSlot)，可在箱子/背包/热栏间互拖。
         static Inventory _p2StorageInv;
         static Inventory _p2StorageSourceInv;
         static GameObject _p2StorageViewGo;
@@ -484,7 +505,7 @@ namespace SplitScreen
             LogV("[P2Storage] 关闭箱子");
         }
 
-        
+        // ── 每帧（背包打开时由 TickMenu 之外的 Runtime.Tick 调用）─────────────
         internal static void TickP2Backpack()
         {
             if (!_p2BackpackOpen || _p2InvCursor == null) return;
@@ -499,7 +520,7 @@ namespace SplitScreen
 
             RefreshP2StorageView();
 
-            
+            // 左摇杆驱动光标（限制在 P2 半屏画布内）
             Vector2 stick = gp.leftStick.ReadValue();
             if (stick.sqrMagnitude < 0.02f) stick = Vector2.zero;
             _p2InvCursorPos += stick * P2BpCursorSpeed * Time.unscaledDeltaTime;
@@ -512,20 +533,20 @@ namespace SplitScreen
                 hrt.anchoredPosition = _p2InvCursorPos + new Vector2(34f, -34f);
 
             Vector2 cursorScreen = RectTransformUtility.WorldToScreenPoint(_p2UiCamera, _p2InvCursor.position);
-            TickP2Crafting(gp, cursorScreen);   
-            if (_p2ResearchTable != null) TickP2Research(gp, cursorScreen);   
+            TickP2Crafting(gp, cursorScreen);   // LB/RB 换分类 + 右摇杆滚动 + 命中配方行(含吸附)
+            if (_p2ResearchTable != null) TickP2Research(gp, cursorScreen);   // 研究模式：滚动配方列表 + 命中配方行
             
             if (_p2HoverSub == null && _p2HoverSkin == null && _p2HoverCraftCost == null && _p2HoverResearch == null)
                 TickP2GridMagnet(gp, RectTransformUtility.WorldToScreenPoint(_p2UiCamera, _p2InvCursor.position));
             UpdateBpHover();
 
-            
+            // 悬停在有物品的格子(或正手持物)时，显示键位提示条(仿原版手柄背包提示)。
             bool hoveringItem = _p2Held != null
                 || (_p2HoverSlot != null && _p2HoverSlot.itemInstance != null)
                 || (_p2HoverHotbar >= 0 && _p2Hotbar != null && _p2HoverHotbar < _p2Hotbar.Length && _p2Hotbar[_p2HoverHotbar] != null);
             ShowBpHints(hoveringItem);
 
-            bool lt = gp.leftTrigger.isPressed;   
+            bool lt = gp.leftTrigger.isPressed;   // 修饰键：LT+A=单个移动；LT+Y=丢弃
 
             if (TickP2HeldOutsideDrop(gp))
             {
@@ -538,24 +559,24 @@ namespace SplitScreen
             if (a && !_wasABp)
             {
                 if (P2CraftTryQuickCraftHovered() || P2CraftTrySelectSkin() || P2CraftTrySelectHovered() || P2ResearchTryLearnHovered()) _aPending = false;   
-                else if (lt) { ClickHoveredSlot(MoveMode.One); _aPending = false; }            
-                else { _aPending = true; _aPressT = Time.unscaledTime; }                       
+                else if (lt) { ClickHoveredSlot(MoveMode.One); _aPending = false; }            // LT+A = 单个
+                else { _aPending = true; _aPressT = Time.unscaledTime; }                       // 延迟判定 轻按/按住
             }
             if (_aPending && a && !lt && Time.unscaledTime - _aPressT > P2HoldHalfDelay)
-                { ClickHoveredSlot(MoveMode.Half); _aPending = false; }                        
+                { ClickHoveredSlot(MoveMode.Half); _aPending = false; }                        // 按住 ≥阈值 = 一半
             if (_aPending && (!a || lt))
-                { ClickHoveredSlot(lt ? MoveMode.One : MoveMode.Whole); _aPending = false; }    
+                { ClickHoveredSlot(lt ? MoveMode.One : MoveMode.Whole); _aPending = false; }    // 松开 = 整摞
             _wasABp = a;
 
-            
+            // Y：LT+Y=丢弃；否则 快速移动(背包↔热栏/箱子)。注意：背包打开时 UiRouter 不再用 Y 关闭(改 B)。
             if (gp.buttonNorth.wasPressedThisFrame) { if (lt) DropHovered(); else QuickMoveHovered(); }
 
-            
+            // X：制造选中的配方
             bool x = gp.buttonWest.isPressed;
-            if (x && !_wasXBp) P2CraftTryCraft();   
+            if (x && !_wasXBp) P2CraftTryCraft();   // 制造(制造模式)；研究改用 RT(见 TickP2Research)
             _wasXBp = x;
 
-            
+            // R3(右摇杆按下)：快速制造(对齐原版控制台 QuickCraft)——先选中光标下的配方再制造。
             if (gp.rightStickButton.wasPressedThisFrame) { P2CraftTrySelectHovered(); P2CraftTryCraft(); }
         }
         static bool _wasXBp;
@@ -567,7 +588,7 @@ namespace SplitScreen
             Vector2 screen = RectTransformUtility.WorldToScreenPoint(_p2UiCamera, _p2InvCursor.position);
 
             Slot hitSlot = null; int hitHotbar = -1; Image hitImg = null;
-            
+            // 1) 真背包格（非热栏，激活）
             foreach (var s in pinv.allSlots)
             {
                 if (s == null || s.slotType == SlotType.Hotbar) continue;
@@ -576,7 +597,7 @@ namespace SplitScreen
                     RectTransformUtility.RectangleContainsScreenPoint(rt, screen, _p2UiCamera))
                 { hitSlot = s; hitImg = s.GetComponent<Image>(); break; }
             }
-            
+            // 1a) 装备槽(equipSlots 不在 allSlots 里，单独遍历；点击走 ClickEquipSlot 路由到 P2 装备)
             if (hitSlot == null && pinv.equipSlots != null)
                 foreach (var s in pinv.equipSlots)
                 {
@@ -586,7 +607,7 @@ namespace SplitScreen
                         RectTransformUtility.RectangleContainsScreenPoint(rt, screen, _p2UiCamera))
                     { hitSlot = s; hitImg = s.GetComponent<Image>(); break; }
                 }
-            
+            // 1b) 打开的箱子格（也是真 Slot → 复用 ClickHoveredSlot 的 kind1）
             if (hitSlot == null && _p2StorageInv != null && _p2StorageInv.allSlots != null)
                 foreach (var s in _p2StorageInv.allSlots)
                 {
@@ -596,7 +617,7 @@ namespace SplitScreen
                         RectTransformUtility.RectangleContainsScreenPoint(rt, screen, _p2UiCamera))
                     { hitSlot = s; hitImg = s.GetComponent<Image>(); break; }
                 }
-            
+            // 1c) 研究输入槽（也是真 Slot → 复用 ClickHoveredSlot 的 kind1 放料/取料）
             if (hitSlot == null && _p2ResearchSlot != null)
             {
                 var rt = ResearchSlotRect();
@@ -604,7 +625,7 @@ namespace SplitScreen
                     RectTransformUtility.RectangleContainsScreenPoint(rt, screen, _p2UiCamera))
                 { hitSlot = _p2ResearchSlot; hitImg = _p2ResearchSlot.GetComponent<Image>(); }
             }
-            
+            // 2) P2 自建热栏（底部条）
             if (hitSlot == null && _p2HotbarSlotRects != null)
                 for (int i = 0; i < _p2HotbarSlotRects.Length; i++)
                 {
@@ -619,8 +640,8 @@ namespace SplitScreen
             _p2HoverSlot = hitSlot; _p2HoverHotbar = hitHotbar; _p2HoverSlotBg = hitImg;
             if (hitImg != null) { _p2HoverPrevColor = hitImg.color; hitImg.color = P2SlotHoverTint; }
 
-            
-            
+            // 悬停物品 → 面板上方显示物品图标 + 名称 + 描述(复刻 vanilla Inventory.HoverEnter→SetItemDescription)。
+            //  itemNameText/itemImage 是已随面板 reparent 到 P2 半屏的子元素 → 自动落在 P2 半屏。
             Item_Base desc = null;
             if (hitSlot != null) desc = hitSlot.GetItemBase();
             else if (hitHotbar >= 0 && _p2Hotbar != null && hitHotbar < _p2Hotbar.Length && _p2Hotbar[hitHotbar] != null)
@@ -628,7 +649,7 @@ namespace SplitScreen
             pinv.SetItemDescription(desc);
         }
 
-        
+        // 格子磁吸：对 热栏/背包/箱子 格子做与制造面板一致的吸附(在半径内拉向最近格中心；摇杆用力可挣脱)。
         static readonly List<RectTransform> _gridMagnetCands = new List<RectTransform>();
         static void TickP2GridMagnet(Gamepad gp, Vector2 cursorScreen)
         {
@@ -661,7 +682,7 @@ namespace SplitScreen
                 if (!rt.gameObject.activeInHierarchy) continue;
                 Vector2 c = RectTransformUtility.WorldToScreenPoint(_p2UiCamera, rt.TransformPoint(rt.rect.center));
                 if (!inside && RectTransformUtility.RectangleContainsScreenPoint(rt, cursorScreen, _p2UiCamera))
-                { bestCenter = c; bestDiff = c - cursorScreen; found = inside = true; continue; }   
+                { bestCenter = c; bestDiff = c - cursorScreen; found = inside = true; continue; }   // 进入格内→最强吸附
                 if (inside) continue;
                 float d = (c - cursorScreen).sqrMagnitude;
                 if (d < bestSq) { bestSq = d; bestCenter = c; bestDiff = c - cursorScreen; found = true; }
@@ -670,7 +691,7 @@ namespace SplitScreen
 
             Vector2 stick = gp.leftStick.ReadValue();
             float escape = P2MagnetEscape * scale;
-            if (bestDiff.sqrMagnitude < (stick * escape).sqrMagnitude) return;   
+            if (bestDiff.sqrMagnitude < (stick * escape).sqrMagnitude) return;   // 摇杆用力 → 挣脱
             float thr = P2MagnetCenterThr * scale;
             Vector2 target = (bestDiff.sqrMagnitude > thr * thr)
                 ? cursorScreen + bestDiff.normalized * (P2MagnetPullSpeed * scale) * Time.unscaledDeltaTime
@@ -684,7 +705,7 @@ namespace SplitScreen
             if (_p2HoverSlotBg != null) _p2HoverSlotBg.color = _p2HoverPrevColor;
             _p2HoverSlotBg = null; _p2HoverSlot = null; _p2HoverHotbar = -1;
             var pinv = ActiveP2BackpackInventory();
-            if (pinv != null) pinv.SetItemDescription(null);   
+            if (pinv != null) pinv.SetItemDescription(null);   // 清空面板上方物品描述
         }
 
         static bool P2HeldIsOutsideItemSlots()
@@ -732,7 +753,7 @@ namespace SplitScreen
             return baseItem != null ? baseItem.UniqueName : "";
         }
 
-        
+        // 移动模式(对齐原版手柄)：整摞 / 一半(按住A) / 单个(LT+A)。
         internal enum MoveMode { Whole, Half, One }
         static int CountFor(MoveMode m, int amt) =>
             m == MoveMode.Whole ? amt : m == MoveMode.Half ? Mathf.CeilToInt(amt * 0.5f) : 1;
@@ -759,12 +780,15 @@ namespace SplitScreen
         {
             if (_p2HeldOriginSlot != null)
             {
+                // 拿起之后来源格可能已被别的操作(制作/快速移动/溢出)填上,不能覆盖。
+                if (!_p2HeldOriginSlot.IsEmpty) return false;
                 _p2HeldOriginSlot.SetItem(item);
                 RefreshP2StorageView();
                 return true;
             }
             if (_p2HeldOriginHotbar >= 0 && _p2Hotbar != null && _p2HeldOriginHotbar < _p2Hotbar.Length)
             {
+                if (_p2Hotbar[_p2HeldOriginHotbar] != null) return false;   // 同上:来源手持栏格已非空
                 _p2Hotbar[_p2HeldOriginHotbar] = item;
                 UpdateP2Hotbar();
                 RefreshP2HeldItem();
@@ -773,12 +797,12 @@ namespace SplitScreen
             return false;
         }
 
-        
-        
-        
+        // A：与悬停目标交互（抓取/放下/堆叠/交换）。真背包格与 P2 自建热栏统一处理，
+        //  手持物 _p2Held 共享 → 可在两者之间互拖（如把热栏的锤子放进背包）。
+        //  mode 决定抓取/放下的数量：整摞 / 一半 / 单个。
         static void ClickHoveredSlot(MoveMode mode = MoveMode.Whole)
         {
-            
+            // 装备槽特判:绝不走下面的 slot.SetItem(对 Slot_Equip 会触发 P1 的 Equip)，改路由到 P2 独立装备。
             if (_p2HoverSlot is Slot_Equip eq) { ClickEquipSlot(eq); return; }
 
             System.Func<ItemInstance> get; System.Action<ItemInstance> set; System.Action refresh;
@@ -855,20 +879,20 @@ namespace SplitScreen
             else { var tmp = cell; set(_p2Held); _p2Held = tmp; ClearP2HeldOrigin(); }       
 
             refresh();
-            
-            
-            
+            // 注意：不要在此重新捕获 _p2HoverSlotBg.color —— 此刻它正显示悬停高亮色，
+            //  捕获后会把"高亮色"当成原色，光标离开时还原成高亮 → 格子永久卡在选中态。
+            //  槽位底图颜色是恒定的(RefreshComponents 只改物品图标)，沿用 hover-enter 时存的原色即可。
             SetHeldVisual(_p2Held);
         }
 
-        
-        
+        // 装备槽点击:把手上装备件装到 P2(模型上 P2 身)/ 取下 P2 装备到手。绕开 P1 的 Slot_Equip.SetItem。
+        //  显示用"直接赋 itemInstance + RefreshComponents"(P2EquipmentStore 同款,不触发 Equip)。
         static void ClickEquipSlot(Slot_Equip eq)
         {
-            var shown = eq.itemInstance;   
+            var shown = eq.itemInstance;   // 当前显示的(P2)装备,可空
             if (_p2Held == null)
             {
-                
+                // 空手 + 槽里有装备 → 取下到手
                 if (shown != null && shown.Valid)
                 {
                     var removed = P2EquipmentStore.UnEquip(P2EquipmentStore.TypeOf(shown));
@@ -890,18 +914,20 @@ namespace SplitScreen
                 eq.RefreshComponents();
                 _p2Held = old;
             }
-            else return;   
+            else return;   // 手上不是装备件 → 装备槽不接收
 
-            RefreshP2BackpackSlots();   
+            RefreshP2BackpackSlots();   // 装/卸背包 → 当帧即时扩展/收缩背包格(对齐原版)
             SetHeldVisual(_p2Held);
         }
 
-        
+        // ── 快速移动 / 丢弃 / 容器间搬运辅助 (对齐原版手柄背包操作) ──────────────
         static System.Collections.Generic.IEnumerable<Slot> NonHotbarSlots(PlayerInventory pinv)
         {
             if (pinv?.allSlots == null) yield break;
             foreach (var s in pinv.allSlots)
-                if (s != null && s.slotType != SlotType.Hotbar) yield return s;
+                // 只给可用的普通格:未激活的背包格是隐藏的(放进去就看不见也点不到),
+                // 装备槽的 SetItem 会去动 P1 的 PlayerEquipment。
+                if (s != null && s.slotType != SlotType.Hotbar && s.active && !(s is Slot_Equip)) yield return s;
         }
 
         static bool SlotBelongs(Inventory inv, Slot slot)
@@ -934,7 +960,7 @@ namespace SplitScreen
                 SyncInventorySlots(_p2StorageSourceInv, _p2StorageInv);
         }
 
-        
+        // 把 src 摞搬进一组真 Slot(先堆同类未满,再填空格)。就地扣减 src.Amount。
         static void MoveStackIntoSlots(ItemInstance src, System.Collections.Generic.IEnumerable<Slot> slots)
         {
             if (src == null || slots == null) return;
@@ -999,11 +1025,13 @@ namespace SplitScreen
             }
         }
 
-        
+        // Y：快速移动 —— 把悬停槽整摞搬到“另一个容器”(开箱子=背包↔箱子；否则=背包↔热栏)。
         static void QuickMoveHovered()
         {
+            // 装备槽只能走 ClickEquipSlot(那里才会同步 P2EquipmentStore);这里直接改槽会复制装备并动到 P1。
+            if (_p2HoverSlot is Slot_Equip) return;
             var pinv = ActiveP2BackpackInventory();
-            if (_p2HoverHotbar >= 0)   
+            if (_p2HoverHotbar >= 0)   // 热栏 → 箱子(若开) 否则 背包
             {
                 var inst = (_p2Hotbar != null && _p2HoverHotbar < _p2Hotbar.Length) ? _p2Hotbar[_p2HoverHotbar] : null;
                 if (inst == null) return;
@@ -1021,7 +1049,7 @@ namespace SplitScreen
                 bool chestSlot = _p2StorageInv != null && ResolveP2StorageSourceSlot(_p2HoverSlot) != null;
                 if (chestSlot) { MoveStackIntoSlots(work, NonHotbarSlots(pinv)); if (work.Amount > 0) MoveStackIntoHotbar(work); }
                 else if (_p2StorageInv != null) MoveStackIntoSlots(work, P2StorageDataSlots());  
-                else MoveStackIntoHotbar(work);                                                    
+                else MoveStackIntoHotbar(work);                                                    // 背包 → 热栏
                 if (work.Amount <= 0) dataSlot.SetItem(null);
                 else { var rem = dataSlot.itemInstance.Clone(); rem.Amount = work.Amount; dataSlot.SetItem(rem); }
                 RefreshP2StorageView();
@@ -1035,6 +1063,7 @@ namespace SplitScreen
         // 旧实现每次只丢 1 个,一组 20 根木头要按 20 次。
         static void DropHovered()
         {
+            if (_p2Held == null && _p2HoverSlot is Slot_Equip) return;   // 同 QuickMoveHovered
             if (player2 == null) return;
             if (_p2Held != null) { DropP2HeldStack(); return; }   // 光标上拿着的:复用整组丢弃路径
 
@@ -1086,7 +1115,7 @@ namespace SplitScreen
             if (_p2HeldCount != null) _p2HeldCount.text = (has && it.Amount > 1) ? it.Amount.ToString() : "";
         }
 
-        
+        // 建一次：手持物图标 + 虚拟光标（挂在 P2 右半屏画布上）
         static void EnsureBpCursor()
         {
             if (_p2InvCursor != null) return;
@@ -1105,8 +1134,8 @@ namespace SplitScreen
 
             var cur = new GameObject("P2_BpCursor", typeof(RectTransform), typeof(CanvasRenderer), typeof(Image));
             _p2InvCursor = cur.GetComponent<RectTransform>(); _p2InvCursor.SetParent(_p2HudCanvas.transform, false);
-            
-            
+            // 轴心居中：吸附时 anchoredPosition=图标中心 → 光标【正中心】对齐图标(而非左上尖端→视觉偏右下)；
+            //  命中检测用 _p2InvCursor.position(=轴心=中心) 也随之一致。
             _p2InvCursor.anchorMin = _p2InvCursor.anchorMax = new Vector2(0.5f, 0.5f); _p2InvCursor.pivot = new Vector2(0.5f, 0.5f);
             _p2InvCursor.anchoredPosition = Vector2.zero;
             var curImg = cur.GetComponent<Image>(); curImg.raycastTarget = false;
@@ -1116,8 +1145,8 @@ namespace SplitScreen
 
             if (uiLayer >= 0) { SetLayerRecursively(hrt, uiLayer); SetLayerRecursively(_p2InvCursor, uiLayer); }
 
-            
-            
+            // 置顶：制造面板自带子 Canvas(overrideSorting) → 仅靠同级顺序压不住它会遮挡光标。
+            //  给手持物/光标各加一个 overrideSorting 的高 sortingOrder Canvas，强制渲染在最上层。
             var heldCanvas = held.AddComponent<Canvas>();
             heldCanvas.overrideSorting = true; heldCanvas.sortingOrder = 30000;
             var curCanvas = cur.AddComponent<Canvas>();
@@ -1126,7 +1155,7 @@ namespace SplitScreen
             _p2InvCursor.gameObject.SetActive(false);
         }
 
-        
+        // 反射取原版 GamepadCursor 光标贴图
         static Sprite GetVanillaCursorSprite()
         {
             try
@@ -1141,7 +1170,7 @@ namespace SplitScreen
             catch { return null; }
         }
 
-        
+        // ── 键位提示条(悬停物品时显示，仿原版手柄背包提示，竖排在 P2 半屏右侧) ──────────
         static RectTransform _p2BpHints;
         static string _p2BpHintLanguage;
         static readonly string[][] P2BackpackHintTermCandidates =
@@ -1180,7 +1209,7 @@ namespace SplitScreen
 
             var go = new GameObject("P2_BpHints", typeof(RectTransform));
             var rt = go.GetComponent<RectTransform>(); rt.SetParent(_p2HudCanvas.transform, false);
-            rt.anchorMin = rt.anchorMax = new Vector2(1f, 0f); rt.pivot = new Vector2(1f, 0f);   
+            rt.anchorMin = rt.anchorMax = new Vector2(1f, 0f); rt.pivot = new Vector2(1f, 0f);   // 右下角
             rt.anchoredPosition = new Vector2(-24f, 24f); rt.sizeDelta = new Vector2(380f, 340f);
             var v = go.AddComponent<VerticalLayoutGroup>();
             v.childAlignment = TextAnchor.LowerRight; v.spacing = 10f;

@@ -16,6 +16,40 @@ namespace SplitScreen
         static bool P2BedRespawnWaitActive;
         internal static int P2BlockCrouchUntilFrame;
         internal static bool P2PostBedExitRestoring => P2PostBedExitRestoreRoutine != null;
+        static int P2BedWaitLostFrames;
+
+        // 离开世界时清掉本流程的静态。协程宿主(P2 的 Player)随世界销毁时协程被直接终止,
+        // 走不到末尾的置空 -> P2PostBedExitRestoring 永远为 true 并带进下一局
+        // (下一局 P2 的手部相机被关、FP 手臂被隐藏)。
+        internal static void ResetForWorldLeave()
+        {
+            P2PostBedExitRestoreRoutine = null;
+            P2RespawnRestoreFrames = 0;
+            P2RespawnRestoreBed = null;
+            P2CompletingRespawnBed = null;
+            P2BedRespawnWaitBed = null;
+            P2BedRespawnWaitActive = false;
+            P2BedWaitLostFrames = 0;
+            P2BlockCrouchUntilFrame = 0;
+            P1DownedAnchorActive = false;
+            P1DownedAnchorParent = null;
+            P1DownedThirdPerson = false;
+            P1WasDeadLastFrame = false;
+        }
+
+        // P2 复活后在床上等起床时,床被拆/被毁 -> 原版 Bed.OnDestroy 把 Sleeping 清了,
+        // 但 waitingForRespawn 没人清:P2 会永久无敌、生存数值冻结。连续 30 帧不在床上就放行。
+        internal static void ReleaseP2BedRespawnWaitIfBedGone(bool sleeping)
+        {
+            if (!P2BedRespawnWaitActive || sleeping) { P2BedWaitLostFrames = 0; return; }
+            if (++P2BedWaitLostFrames < 30) return;
+            P2BedWaitLostFrames = 0;
+            P2BedRespawnWaitActive = false;
+            P2BedRespawnWaitBed = null;
+            var p2 = Main.player2;
+            if (p2 != null && p2.PlayerScript != null) p2.PlayerScript.waitingForRespawn = false;
+            Main.ModEntry.Logger.Log("[P2 Respawn] 等待起床期间床已不在 -> 解除 waitingForRespawn");
+        }
 
         internal static IEnumerator CompleteP2BedReviveAfterDelay(Player player, Bed bed, float delay)
         {

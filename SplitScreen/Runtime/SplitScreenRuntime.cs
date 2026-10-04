@@ -77,52 +77,96 @@ namespace SplitScreen
             UI           = new UiRouter(this);
         }
 
+        // ---- 子系统隔离 ----
+        // 每个子系统单独兜异常:一个抛了不拖垮同帧其余子系统。日志按名字节流。
+        // 用无捕获的 lambda(编译器缓存成静态委托),不产生每帧分配。
+        static readonly System.Collections.Generic.Dictionary<string, int> s_tickErrorFrame =
+            new System.Collections.Generic.Dictionary<string, int>();
+
+        static void ReportTickError(string name, System.Exception e)
+        {
+            // 子系统之间不该有 P2 作用域跨着;抛异常的那个可能漏了,立刻收回。
+            Main.RecoverLeakedP2ScopeIfAny();
+            int last;
+            if (s_tickErrorFrame.TryGetValue(name, out last) && Time.frameCount - last < 300) return;
+            s_tickErrorFrame[name] = Time.frameCount;
+            Main.ModEntry.Logger.Log("[Tick] " + name + " 异常(同名 300 帧内只记一次): " + e);
+        }
+
+        static void Run(string name, System.Action a)
+        {
+            try { a(); }
+            catch (System.Exception e) { ReportTickError(name, e); }
+        }
+
+        static bool Check(string name, System.Func<bool> f)
+        {
+            try { return f(); }
+            catch (System.Exception e) { ReportTickError(name, e); return false; }
+        }
+
+        void TickMenuSafe()
+        {
+            try { UI.TickMenu(); }
+            catch (System.Exception e) { ReportTickError("UI.TickMenu", e); }
+        }
+
+        void TickDeathSafe(float dt)
+        {
+            try { TickDeath(dt); }
+            catch (System.Exception e) { ReportTickError("TickDeath", e); }
+        }
+
         public void Tick(float dt)
         {
             if (!P2Active) return;
-            P2ZiplineDriver.EnsureActiveIfAttached();   // 挂滑索时每帧保活GO(早于所有早退;修TP卡住)
-            Input.Tick();
-            Main.MaintainLocalPlayerCM();
-            Main.MaintainP2InventoryField();
-            Main.UpdateSplitWellBeingFactors();
-            Main.EnforceMeshStates();
-            Main.ReconcileP2LoadCircle();   // 蓄力读条圈停刷即隐藏,防卡满值
-            SplitScreenDeathFlow.TickDeathMenuGate();
-            SplitScreenDeathFlow.TickP1DownedCamera();
-            P1PianoViewToggle.Tick();   // P1 在钢琴前也能按 V 切视角(绕过原版的 ActiveMenu 门控)
+            Run("ZiplineKeepAlive", () => P2ZiplineDriver.EnsureActiveIfAttached());   // 挂滑索时每帧保活GO(早于所有早退;修TP卡住)
+            try { Input.Tick(); }
+            catch (System.Exception e) { ReportTickError("Input.Tick", e); }
+            Run("MaintainLocalPlayerCM", () => Main.MaintainLocalPlayerCM());
+            Run("MaintainP2InventoryField", () => Main.MaintainP2InventoryField());
+            Run("WellBeing", () => Main.UpdateSplitWellBeingFactors());
+            Run("EnforceMeshStates", () => Main.EnforceMeshStates());
+            Run("LoadCircle", () => Main.ReconcileP2LoadCircle());   // 蓄力读条圈停刷即隐藏,防卡满值
+            Run("DeathMenuGate", () => SplitScreenDeathFlow.TickDeathMenuGate());
+            Run("P1DownedCamera", () => SplitScreenDeathFlow.TickP1DownedCamera());
+            Run("P1PianoView", () => P1PianoViewToggle.Tick());   // P1 在钢琴前也能按 V 切视角(绕过原版的 ActiveMenu 门控)
 
             if (P2.Player?.PlayerScript != null && P2.Player.PlayerScript.IsDead)
             {
-                Main.ApplyP2DownedOriginalInputRestrictions();
-                Main.TickP2StatHud();
-                TickDeath(dt);
+                Run("P2DownedInput", () => Main.ApplyP2DownedOriginalInputRestrictions());
+                Run("StatHud", () => Main.TickP2StatHud());
+                TickDeathSafe(dt);
                 return;
             }
 
-            Main.TickP2Hotbar();
-            Main.TickP2StatHud();
+            Run("Hotbar", () => Main.TickP2Hotbar());
+            Run("StatHud", () => Main.TickP2StatHud());
 
-            Main.TickP2SleepFade();
-            Main.TickP2Binoculars();
+            Run("SleepFade", () => Main.TickP2SleepFade());
+            Run("Binoculars", () => Main.TickP2Binoculars());
 
-            if (Main.TickP2Bed()) { TickDeath(dt); return; }
+            if (Check("Bed", () => Main.TickP2Bed())) { TickDeathSafe(dt); return; }
 
-            if (Main.TickP2Seat()) { TickDeath(dt); return; }
+            if (Check("Seat", () => Main.TickP2Seat())) { TickDeathSafe(dt); return; }
 
             // 雪橇车就座 → 早退(同椅子:就座期间不跑工具/建造/背包 tick),下车由 TickP2Snowmobile 检测
-            if (Main.TickP2Snowmobile()) { TickDeath(dt); return; }
+            if (Check("Snowmobile", () => Main.TickP2Snowmobile())) { TickDeathSafe(dt); return; }
 
-            if (Main.TickP2Carry(this)) { TickDeath(dt); return; }
+            bool carrying = false;
+            try { carrying = Main.TickP2Carry(this); }
+            catch (System.Exception e) { ReportTickError("Carry", e); }
+            if (carrying) { TickDeathSafe(dt); return; }
 
-            if (Main.IsP2MenuOpen) { Main.TickP2Menu(); TickDeath(dt); return; }
-            Main.TickP2Backpack();
+            if (Main.IsP2MenuOpen) { Run("Menu", () => Main.TickP2Menu()); TickDeathSafe(dt); return; }
+            Run("Backpack", () => Main.TickP2Backpack());
 
-            if (P2ZiplineDriver.IsAttached) { P2ZiplineDriver.Tick(); UI.TickMenu(); TickDeath(dt); return; }
-            P2ToolRunner.Tick();
-            Main.TickP2Build();
-            Main.TickP2BuildMenu();
-            UI.TickMenu();
-            TickDeath(dt);
+            if (P2ZiplineDriver.IsAttached) { Run("Zipline", () => P2ZiplineDriver.Tick()); TickMenuSafe(); TickDeathSafe(dt); return; }
+            Run("ToolRunner", () => P2ToolRunner.Tick());
+            Run("Build", () => Main.TickP2Build());
+            Run("BuildMenu", () => Main.TickP2BuildMenu());
+            TickMenuSafe();
+            TickDeathSafe(dt);
         }
 
         void TickDeath(float dt)

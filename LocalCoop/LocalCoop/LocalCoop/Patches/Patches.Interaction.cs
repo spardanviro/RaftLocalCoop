@@ -4,12 +4,12 @@ using UnityEngine;
 
 namespace SplitScreen
 {
-    
-    
+    // ══════════════════════════════════════════════════════════════════════
+    //  Patch 17: Pickup.Update — P2 独立捡起 + 交互提示
     //
-    
-    
-    
+    //  全部逻辑移入 InteractionRouter.HandlePickupUpdate()；
+    //  此处只是薄转发。
+    // ══════════════════════════════════════════════════════════════════════
     [HarmonyPatch(typeof(Pickup), "Update")]
     static class Patch_Pickup_Update
     {
@@ -24,17 +24,17 @@ namespace SplitScreen
         }
     }
 
-    
-    
-    
-    
+    // ══════════════════════════════════════════════════════════════════════
+    //  Patch: InventoryPickup.ShowItem — P2 拾取时原版"捡到 X"弹在 P1 共享 HUD → 改弹到 P2 半屏右下角 toast。
+    //   (P2 拾取靠 AddItem→PlayerInventory.AddItem 触发 inventoryPickup.ShowItem；P2 上下文时屏蔽 P1 弹窗并转发 P2。)
+    // ══════════════════════════════════════════════════════════════════════
     [HarmonyPatch(typeof(InventoryPickup), "ShowItem", new[] { typeof(string), typeof(int) })]
     static class Patch_InventoryPickup_ShowItem_P2
     {
         static bool Prefix(string uniqueItemName, int amount)
         {
-            if (!(P2InventoryStore.RoutingPickup || Main.IsP2OriginalActive)) return true;  
-            Main.ShowP2PickupToast(uniqueItemName, amount);   
+            if (!(P2InventoryStore.RoutingPickup || Main.IsP2OriginalActive)) return true;  // P1 → 原版
+            Main.ShowP2PickupToast(uniqueItemName, amount);   // P2 → 右下角 toast，屏蔽 P1 弹窗
             return false;
         }
     }
@@ -63,16 +63,16 @@ namespace SplitScreen
         }
     }
 
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
+    // ══════════════════════════════════════════════════════════════════════
+    //  Patch: Inventory.FindSuitableSlot — P2 拾取/采集期间只用【背包格(非热栏)】
+    //   原版按 allSlots 顺序返回第一个空槽，可能是 P1 热栏空格(热栏不参与 P2 换入换出→物品丢失)。
+    //   RoutingPickup 期间改为：跳过 Hotbar 槽，只在非热栏(=已换入 P2 背包数据)里找空格/可叠加格。
+    // ══════════════════════════════════════════════════════════════════════
+    // ══════════════════════════════════════════════════════════════════════
+    //  Patch: CanvasHelper.OpenMenu / OpenMenuCloseOther — 通用 P2 菜单宿主
+    //   P2 设备上下文(isProcessingP2Ray)开任意菜单 → 搬到 P2 半屏(Main.OpenP2Menu)，跳过原版
+    //   (原版会设全局 ActiveMenu/锁光标/切 P1 输入 → 冻结 P1)。P1 正常开菜单不受影响。
+    // ══════════════════════════════════════════════════════════════════════
     [HarmonyPatch(typeof(CanvasHelper), "OpenMenu")]
     static class Patch_CanvasHelper_OpenMenu_P2
     {
@@ -84,8 +84,8 @@ namespace SplitScreen
                 __result = true;
                 return false;
             }
-            
-            
+            // P2 设备射线(isProcessingP2Ray) 或 P2 工具上下文(IsP2OriginalActive，如钓竿饵菜单/颜料刷调色菜单)开菜单 → 搬 P2 半屏。
+            //  但仅限白名单(非全局/非专门通道菜单)，避免把 暂停/过场/建造菜单/背包 误塞到 P2 半屏。
             if (!(Main.isProcessingP2Ray || Main.IsP2OriginalActive) || !Main.ShouldHostP2Menu(menuType)) return true;
             __result = Main.OpenP2Menu(__instance, menuType);
             return false;
@@ -103,8 +103,8 @@ namespace SplitScreen
                 __result = true;
                 return false;
             }
-            
-            
+            // P2 设备射线(isProcessingP2Ray) 或 P2 工具上下文(IsP2OriginalActive，如钓竿饵菜单/颜料刷调色菜单)开菜单 → 搬 P2 半屏。
+            //  但仅限白名单(非全局/非专门通道菜单)，避免把 暂停/过场/建造菜单/背包 误塞到 P2 半屏。
             if (!(Main.isProcessingP2Ray || Main.IsP2OriginalActive) || !Main.ShouldHostP2Menu(menuType)) return true;
             __result = Main.OpenP2Menu(__instance, menuType);
             return false;
@@ -136,9 +136,9 @@ namespace SplitScreen
     [HarmonyPatch(typeof(Inventory), "FindSuitableSlot", new[] { typeof(Item_Base) })]
     static class Patch_Inventory_FindSuitableSlot_BackpackFirst
     {
-        
-        
-        
+        // 优先进背包(用户偏好，对两个玩家生效)：背包同类未满 > 背包空格 > 热栏同类未满 > 热栏空格。
+        //  P2 拾取/制造上下文(RoutingPickup)绝不用热栏(P2 热栏是自定义数组，不在真实 allSlots 里)。
+        //  仅作用于 PlayerInventory(箱子等其它库存不动)。
         static bool Prefix(Inventory __instance, Item_Base stackableItem, ref Slot __result)
         {
             if (!(__instance is PlayerInventory)) return true;
@@ -152,7 +152,7 @@ namespace SplitScreen
             {
                 if (s == null) continue;
                 bool isHotbar = s.slotType == SlotType.Hotbar;
-                if (p2 && isHotbar) continue;                       
+                if (p2 && isHotbar) continue;                       // P2：绝不用真实热栏
                 bool isBackpack = s.slotType == SlotType.Backpack;
                 bool p2BpWithinCap = false;
                 if (p2 && isBackpack) { p2BpWithinCap = p2BpSeen < p2BpCap; p2BpSeen++; }
@@ -169,16 +169,16 @@ namespace SplitScreen
                     else          { if (bpStack == null) bpStack = s; }
                 }
             }
-            __result = bpStack ?? bpEmpty ?? hbStack ?? hbEmpty;   
+            __result = bpStack ?? bpEmpty ?? hbStack ?? hbEmpty;   // 背包优先；热栏兜底(P1 背包满时)
             return false;
         }
     }
 
-    
-    
-    
-    
-    
+    // ══════════════════════════════════════════════════════════════════════
+    //  P2 背包满溢出 → 从 P2 身上掉落(而非 P1)
+    //   背包满时 Inventory.AddItem 走 localPlayerInventory.DropItem(...)，原版用 hotbar.playerNetwork(=共享背包属主 P1)
+    //   的位置/朝向掉落 → P2 拾取/制造溢出的物品从 P1 身上掉。RoutingPickup 期间(P2 拾取/制造)改用 P2 的位置/朝向。
+    // ══════════════════════════════════════════════════════════════════════
     static class P2DropRedirect
     {
         internal static bool Active => Main.player2 != null && P2InventoryStore.RoutingPickup
@@ -212,22 +212,22 @@ namespace SplitScreen
         }
     }
 
-    
-    
+    // ══════════════════════════════════════════════════════════════════════
+    //  Patch 20: CraftingMenu.CraftItem — P2 制作时将 localPlayer 字段临时换成 P2
     //
-    
-    
-    
-    
-    
+    //  CraftItem IL 直接读 this.localPlayer 字段调 RemoveCostMultiple / AddItem，
+    //  不经过 ComponentManager → 必须用 field-swap。
+    // ══════════════════════════════════════════════════════════════════════
+    // ══════════════════════════════════════════════════════════════════════
+    //  Patch 20: CraftingMenu.CraftItem — P2 制作时将 localPlayer 字段临时换成 P2
     //
-    
-    
-    
-    
-    
-    
-    
+    //  还原策略：
+    //    Postfix  = 正常路径（无异常）还原，同时清 module-level static。
+    //    Finalizer= 异常路径还原（Postfix 未跑，static 仍有值）。
+    //    Harmony 2.3.6 Finalizer 不支持 __state 参数，故用 module-level
+    //    static 在 Prefix/Postfix/Finalizer 三者之间传递保存值。
+    //    Unity 主线程单线程执行，不需要 [ThreadStatic]。
+    // ══════════════════════════════════════════════════════════════════════
     [HarmonyPatch(typeof(CraftingMenu), "CraftItem")]
     static class Patch_CraftingMenu_CraftItem
     {
@@ -356,9 +356,9 @@ namespace SplitScreen
             !Main.IsP2CraftingUiComponent(__instance);
     }
 
-    
-    
-    
+    // ══════════════════════════════════════════════════════════════════════
+    //  Patch 25: Helper.LocalPlayerIsWithinDistance — P2 位置路由
+    // ══════════════════════════════════════════════════════════════════════
     [HarmonyPatch(typeof(Helper), "LocalPlayerIsWithinDistance")]
     static class Patch25_Helper_LocalPlayerIsWithinDistance_P2
     {
@@ -370,9 +370,9 @@ namespace SplitScreen
         }
     }
 
-    
-    
-    
+    // ══════════════════════════════════════════════════════════════════════
+    //  Patch 26: StorageManager.OpenStorage / CloseStorage — P2 背包链接
+    // ══════════════════════════════════════════════════════════════════════
     [HarmonyPatch(typeof(StorageManager), "OpenStorage")]
     static class Patch26a_StorageManager_OpenStorage_P2
     {
@@ -406,16 +406,16 @@ namespace SplitScreen
         }
     }
 
-    
-    
-    
+    // ══════════════════════════════════════════════════════════════════════
+    //  Patch 27: Storage_Small.Open / Close — P2 UI 显示
+    // ══════════════════════════════════════════════════════════════════════
     [HarmonyPatch(typeof(Storage_Small), "Open")]
     static class Patch27a_Storage_Small_Open_P2
     {
         static void Postfix(Storage_Small __instance, Network_Player player)
         {
             if (Main.player2 == null || player != Main.player2) return;
-            
+            // P2 半屏箱子 UI（不调 OpenMenuCloseOther → 不设全局 ActiveMenu → 不冻结 P1）。
             Main.OpenP2Storage(__instance);
             Main.LogV("[Patch27a] P2 Storage_Small.Open -> P2 storage UI");
         }

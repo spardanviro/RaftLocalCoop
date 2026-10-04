@@ -26,7 +26,7 @@ namespace SplitScreen
                 OutfitIndex = fallback != null ? fallback.OutfitIndex : 0,
                 Platform = 0
             };
-
+            // 诊断日志：每次 InitializeComponents 之后都报告关键组件状态
             try
             {
                 string path = PathForSettings();

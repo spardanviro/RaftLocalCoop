@@ -7,28 +7,28 @@ using UnityEngine.InputSystem;
 
 namespace SplitScreen
 {
-    
-    
+    // ══════════════════════════════════════════════════════════════════════
+    //  P2 塑料钩(收集漂浮物) —— 让 P2 能抛钩、拉钩、采集水里资源。
     //
-    
-    
-    
+    //  原版 Hook/Throwable 的 Update 门控 playerNetwork.IsLocalPlayer：本地玩家跑【抛投/拉扯/采集】
+    //  分支，非本地玩家跑【远端显示/网络插值】分支。P2 是克隆(isLocalPlayer=false)，故原生只跑远端分支。
+    //  且 Throwable 的抛投力用 Camera.main(=P1 相机)、收集物 AddItem 落到共享单例(=P1)。
     //
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
+    //  做法(复用统一代理层 + 专用包裹)：
+    //   - Hook.Update / Throwable.Update：单次原生 Update 整段包进 P2OriginalScope.Tool()(强制本地
+    //     → 跑本地分支；IsP2OriginalActive → 准星射线/GetMineableItemAtCursor 用 P2 相机并跳过 P2 自身)。
+    //     这里【不能】走通用 P2ToolRunner：它们的远端分支不是空 return(有可见副作用/网络插值)，
+    //     若再额外调一次会与原生那次冲突；故改为【包裹原生 Update】(等价旧 Axe.Update 专用补丁套路)。
+    //   - 抛投相机：Throwable.HandleLocalClient 里 Camera.main → P2HookAim.ThrowCam()(P2 上下文用 P2 相机)。
+    //   - 收集路由：Hook.Update 期间换入 P2 背包 + RoutingPickup → 钩到的漂浮物进 P2 背包。
+    //   - PlayerItemManager.IsBusy 是全局静态：钩子出手期间 HandleLocalClient 会置真 → 会卡住 P1 用工具。
+    //     故在 P2 的 Throwable.Update 前后 save/restore，把 P2 对它的改动限制在本窗口，不泄漏给 P1。
+    //   - 输入：LMB(抛/蓄力/拉) → P2 RT(由 CIC "LMB" Tool-scope 路由)；RMB(取消) → P2 LT(由 RMB→ActionContext 路由)。
+    // ══════════════════════════════════════════════════════════════════════
 
     static class P2HookAim
     {
-        
+        // 抛投方向相机：P2 原版执行上下文中用 P2 相机；否则原版 Camera.main(P1)。
         public static Camera ThrowCam()
         {
             if (Main.IsP2OriginalActive && Main.player2 != null && Main.player2.Camera != null)
@@ -36,9 +36,9 @@ namespace SplitScreen
             return Camera.main;
         }
 
-        
-        
-        
+        // 模拟扳机【模拟量】读取：原版抛投蓄力/拉扯/采集用 action.ReadValue<float>() 读 P1 Fire 轴(P2 操作时=0)。
+        //  CIC 补丁只改了布尔 IsPressed/WasPressed，没改 ReadValue → 蓄力恒为 0(没蓄力条/抛不出)。
+        //  P2 上下文里改读 P2 手柄右扳机模拟量。
         public static float ReadFire(InputAction a)
         {
             var gp = Main.GetP2BoundGamepad();
@@ -47,9 +47,9 @@ namespace SplitScreen
             return a != null ? a.ReadValue<float>() : 0f;
         }
 
-        
-        
-        
+        // 移动读取(滑索马达等)：P2 上下文里改读 P2 左摇杆，否则原版动作(P1)。
+        //  数字化为 ±1(过死区):滑索马达 vanilla 用 (int)movementInput,模拟量(0.99)会被截断成 0 → 不加速/卡住。
+        //  量化后摇杆推到位即 ±1 → 全速;原版键盘 GetAxis 本就是 ±1,行为对齐。
         public static Vector2 ReadMove(InputAction a)
         {
             if (Main.IsP2OriginalActive && Main.p2ActionMove != null)
@@ -63,7 +63,7 @@ namespace SplitScreen
         }
     }
 
-    
+    // 把 method 内所有 InputAction.ReadValue<float>() 调用替换为 P2HookAim.ReadFire(该 action)。
     static class HookReadValueTranspiler
     {
         internal static IEnumerable<CodeInstruction> Replace(IEnumerable<CodeInstruction> instructions)
@@ -116,10 +116,10 @@ namespace SplitScreen
             if (Main.IsP2MenuOpen || Main.IsP2BackpackOpen || Main.IsP2BuildMenuOpen) return;   
             var np = __instance.GetComponentInParent<Network_Player>();
             if (np == null || np != Main.player2) return;
-            
-            
-            
-            
+            // P2 的抛投改为【松手即抛】(不依赖抛投动画事件)：原版 thrownByAnimationEvent=true 时，松手只调
+            //  Action_OnThrow(重置动画 bool)，真正 Throw() 靠抛投动画帧的事件触发——而 P2 的抛投动画/事件不触发
+            //  → 有音效却没抛出、且 HookInHand 被重置致二次无蓄力动画。置 false 后松手直接 Animation_HookThrow()→Throw()
+            //  (Throw 内部自行重置动画 bool + chargeMeter)。仅改 P2 自己的 Throwable 实例，P1 不受影响。
             if (__instance.thrownByAnimationEvent) __instance.thrownByAnimationEvent = false;
             __state = new ThrowableP2State { Busy = new PlayerItemBusyScope(), Ctx = P2FrameContext.Tool() };
         }
@@ -247,6 +247,9 @@ namespace SplitScreen
     static class Patch_Throwable_HandleLocalClient_P2
     {
         static IEnumerable<CodeInstruction> Transpiler(IEnumerable<CodeInstruction> instructions)
+            => TranspilerGuard.Verify(instructions, TranspilerCore);
+
+        static IEnumerable<CodeInstruction> TranspilerCore(IEnumerable<CodeInstruction> instructions)
         {
             var camMain  = AccessTools.PropertyGetter(typeof(Camera), "main");
             var camRepl  = AccessTools.Method(typeof(P2HookAim), "ThrowCam");
@@ -261,11 +264,14 @@ namespace SplitScreen
         }
     }
 
-    
+    // Hook.Update 内的拉扯/采集力 ReadValue<float>() 同样改读 P2 右扳机。
     [HarmonyPatch(typeof(Hook), "Update")]
     static class Patch_Hook_Update_ReadValueP2
     {
         static IEnumerable<CodeInstruction> Transpiler(IEnumerable<CodeInstruction> instructions)
+            => TranspilerGuard.Verify(instructions, TranspilerCore);
+
+        static IEnumerable<CodeInstruction> TranspilerCore(IEnumerable<CodeInstruction> instructions)
             => HookReadValueTranspiler.Replace(instructions);
     }
 
@@ -277,6 +283,9 @@ namespace SplitScreen
     static class Patch_Hook_HandleGathering_ReadValueP2
     {
         static IEnumerable<CodeInstruction> Transpiler(IEnumerable<CodeInstruction> instructions)
+            => TranspilerGuard.Verify(instructions, TranspilerCore);
+
+        static IEnumerable<CodeInstruction> TranspilerCore(IEnumerable<CodeInstruction> instructions)
             => HookReadValueTranspiler.Replace(instructions);
     }
 
